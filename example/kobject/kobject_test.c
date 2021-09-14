@@ -4,17 +4,6 @@
 #include <linux/init.h>/* Needed for __init */
 #include <linux/sysfs.h>/* Needed for __init */
 
-#include <linux/kernfs.h>                                                                      
-#include <linux/compiler.h>                                                                    
-#include <linux/errno.h>                                                                       
-#include <linux/list.h>                                                                        
-#include <linux/lockdep.h>                                                                     
-#include <linux/kobject_ns.h>                                                                  
-#include <linux/stat.h>                                                                        
-#include <linux/atomic.h>
-
-
-
 void kobj_test_release(struct kobject *kobject)
 {
 	printk("realse\n");
