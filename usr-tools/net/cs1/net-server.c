@@ -1,96 +1,83 @@
 #include <stdio.h>
 #include <string.h>		//bzero
 #include <stdlib.h>		//exit
-#include <arpa/inet.h>		//htons,htonl
 
 #include <unistd.h>		//read,close
 #include <sys/types.h>
 #include <sys/socket.h>		//socket,bind
-#include <linux/in.h>
+#include <arpa/inet.h>		//htons,htonl
 
 //#include <netinet/in.h>
-//struct addrinfo
-#include <netdb.h>	//struct addrinfo,AI_PASSIVE,NI_MAXHOST,NI_NUMERICSERV
 
-#define BUF_SIZE 500
-
-int
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
-   struct addrinfo hints;
-   struct addrinfo *result, *rp;
-   int sfd, s;
-   struct sockaddr_storage peer_addr;
-   socklen_t peer_addr_len;
-   ssize_t nread;
-   char buf[BUF_SIZE];
+	unsigned short port = 8000;
+	if (argv[1] != NULL)
+		port = atoi(argv[1]);
 
-   if (argc != 2) {
-       fprintf(stderr, "Usage: %s port\n", argv[0]);
-       exit(EXIT_FAILURE);
-   }
+	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd < 0) {
+		perror("socket");
+		exit(-1);
+	}
 
-   memset(&hints, 0, sizeof(struct addrinfo));
-   hints.ai_family = AF_UNSPEC;    /* Allow IPv4 or IPv6 */
-   hints.ai_socktype = SOCK_DGRAM; /* Datagram socket */
-   hints.ai_flags = AI_PASSIVE;    /* For wildcard IP address */
-   hints.ai_protocol = 0;          /* Any protocol */
-   hints.ai_canonname = NULL;
-   hints.ai_addr = NULL;
-   hints.ai_next = NULL;
-   s = getaddrinfo(NULL, argv[1], &hints, &result);
-   if (s != 0) {
-       fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
-       exit(EXIT_FAILURE);
-   }
+	struct sockaddr_in my_addr;
+	bzero(&my_addr, sizeof(my_addr));
+	my_addr.sin_family = AF_INET;
+	my_addr.sin_port = htons(port);
+	my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-   /* getaddrinfo() returns a list of address structures.
-      Try each address until we successfully bind(2).
-      If socket(2) (or bind(2)) fails, we (close the socket
-      and) try the next address. */
+	int err_log =
+	    bind(sockfd, (struct sockaddr *)&my_addr, sizeof(my_addr));
+	if (err_log != 0) {
+		perror("binding");
+		close(sockfd);
+		exit(-1);
+	}
 
-   for (rp = result; rp != NULL; rp = rp->ai_next) {
-       sfd = socket(rp->ai_family, rp->ai_socktype,
-	       rp->ai_protocol);
-       if (sfd == -1)
-	   continue;
+#if 0
+	err_log = listen(sockfd, 1);	// 等待队列为2
+#else
+	err_log = listen(sockfd, 0);	// 等待队列为1
+#endif
+	if (err_log != 0) {
+		perror("listen");
+		close(sockfd);
+		exit(-1);
+	}
+	printf("listen client @port=%d...\n", port);
 
-       if (bind(sfd, rp->ai_addr, rp->ai_addrlen) == 0)
-	   break;                  /* Success */
+	int i = 0;
 
-       close(sfd);
-   }
+	while (1) {
+		struct sockaddr_in client_addr;
+		char client_ip[INET_ADDRSTRLEN] = { 0 };
+		socklen_t cliaddr_len = sizeof(client_addr);
 
-   if (rp == NULL) {               /* No address succeeded */
-       fprintf(stderr, "Could not bind\n");
-       exit(EXIT_FAILURE);
-   }
+		int connfd;
+		connfd =
+		    accept(sockfd, (struct sockaddr *)&client_addr,
+			   &cliaddr_len);
+		if (connfd < 0) {
+			perror("accept");
+			continue;
+		}
 
-   freeaddrinfo(result);           /* No longer needed */
+		inet_ntop(AF_INET, &client_addr.sin_addr, client_ip,
+			  INET_ADDRSTRLEN);
+		printf("-----------%d------\n", ++i);
+		printf("client ip: %s, port: %d\n", client_ip,
+		       ntohs(client_addr.sin_port));
 
-   /* Read datagrams and echo them back to sender */
+		char recv_buf[500] = { 0 };
+		while (recv(connfd, recv_buf, sizeof(recv_buf), 0) > 0) {
+			printf("recv data: %s\n", recv_buf);
+			break;
+		}
 
-   for (;;) {
-       peer_addr_len = sizeof(struct sockaddr_storage);
-       nread = recvfrom(sfd, buf, BUF_SIZE, 0,
-	       (struct sockaddr *) &peer_addr, &peer_addr_len);
-		      if (nread == -1)
-	   continue;               /* Ignore failed request */
-
-       char host[NI_MAXHOST], service[NI_MAXSERV];
-
-       s = getnameinfo((struct sockaddr *) &peer_addr,
-		       peer_addr_len, host, NI_MAXHOST,
-		       service, NI_MAXSERV, NI_NUMERICSERV);
-       if (s == 0)
-	   printf("Received %zd bytes from %s:%s\n",
-		   nread, host, service);
-       else
-	   fprintf(stderr, "getnameinfo: %s\n", gai_strerror(s));
-
-       if (sendto(sfd, buf, nread, 0,
-		   (struct sockaddr *) &peer_addr,
-		   peer_addr_len) != nread)
-	   fprintf(stderr, "Error sending response\n");
-   }
+		close(connfd);	//关闭已连接套接字
+		printf("client closed!\n");
+	}
+	close(sockfd);		//关闭监听套接字
+	return 0;
 }

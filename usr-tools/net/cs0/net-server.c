@@ -1,12 +1,11 @@
 #include <stdio.h>
 #include <string.h>		//bzero
 #include <stdlib.h>		//exit
-#include <arpa/inet.h>		//htons,htonl
 
 #include <unistd.h>		//read,close
+#include <arpa/inet.h>		//htons,htonl
 #include <sys/types.h>
 #include <sys/socket.h>		//socket,bind
-#include <linux/in.h>
 
 //#include <netinet/in.h>
 

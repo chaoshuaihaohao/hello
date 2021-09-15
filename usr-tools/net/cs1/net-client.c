@@ -1,107 +1,49 @@
 #include <stdio.h>
-#include <string.h>	//bzero
-#include <stdlib.h>	//exit
+#include <string.h>		//bzero
+#include <stdlib.h>		//exit
 
-#include <netinet/in.h>	//IPPROTO_TCP
-#include <arpa/inet.h>	//htons,htonl
+#include <unistd.h>		//read,close
+#include <netinet/in.h>		//IPPROTO_TCP
+#include <arpa/inet.h>		//htons,htonl
 
-#include <unistd.h>	//read,close
 #include <sys/types.h>
-#include <sys/socket.h>	//socket,bind
-#include <linux/in.h>
+#include <sys/socket.h>		//socket,bind
 
+int main(int argc, char *argv[])
+{
+	if (argc < 4) {
+		fprintf(stderr, "Usage: %s host port msg...\n", argv[0]);
+		exit(EXIT_FAILURE);
+	}
 
-       #include <sys/types.h>
-       #include <sys/socket.h>
-       #include <netdb.h>
-       #include <stdio.h>
-       #include <stdlib.h>
-       #include <unistd.h>
-       #include <string.h>
+	char *server_ip = argv[1];	// 服务器ip地址
+	unsigned short port = atoi(argv[2]);	// 服务器的端口号
+	char *msg = argv[3];
 
-       #define BUF_SIZE 500
+	int sockfd;
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);	// 创建通信端点：套接字
+	if (sockfd < 0) {
+		perror("socket");
+		exit(-1);
+	}
 
-       int
-       main(int argc, char *argv[])
-       {
-           struct addrinfo hints;
-           struct addrinfo *result, *rp;
-           int sfd, s, j;
-           size_t len;
-           ssize_t nread;
-           char buf[BUF_SIZE];
+	struct sockaddr_in server_addr;
+	bzero(&server_addr, sizeof(server_addr));	// 初始化服务器地址
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(port);
+	//将点分格式ip转换为二进制格式
+	inet_pton(AF_INET, server_ip, &server_addr.sin_addr);
 
-           if (argc < 3) {
-               fprintf(stderr, "Usage: %s host port msg...\n", argv[0]);
-               exit(EXIT_FAILURE);
-           }
+	int err_log = connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr));	// 主动连接服务器
+	if (err_log != 0) {
+		perror("connect");
+		close(sockfd);
+		exit(-1);
+	}
 
-           /* Obtain address(es) matching host/port */
+	send(sockfd, msg, strlen(msg), 0);	// 向服务器发送信息
 
-           memset(&hints, 0, sizeof(struct addrinfo));
-           hints.ai_family = AF_UNSPEC;    /* Allow IPv4 or IPv6 */
-           hints.ai_socktype = SOCK_DGRAM; /* Datagram socket */
-           hints.ai_flags = 0;
-           hints.ai_protocol = 0;          /* Any protocol */
+	close(sockfd);
 
-           s = getaddrinfo(argv[1], argv[2], &hints, &result);
-           if (s != 0) {
-               fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
-               exit(EXIT_FAILURE);
-           }
-
-           /* getaddrinfo() returns a list of address structures.
-              Try each address until we successfully connect(2).
-              If socket(2) (or connect(2)) fails, we (close the socket
-              and) try the next address. */
-
-           for (rp = result; rp != NULL; rp = rp->ai_next) {
-               sfd = socket(rp->ai_family, rp->ai_socktype,
-                            rp->ai_protocol);
-               if (sfd == -1)
-                   continue;
-
-               if (connect(sfd, rp->ai_addr, rp->ai_addrlen) != -1)
-                   break;                  /* Success */
-
-               close(sfd);
-           }
-
-           if (rp == NULL) {               /* No address succeeded */
-               fprintf(stderr, "Could not connect\n");
-               exit(EXIT_FAILURE);
-           }
-
-           freeaddrinfo(result);           /* No longer needed */
-
-           /* Send remaining command-line arguments as separate
-              datagrams, and read responses from server */
-
-           for (j = 3; j < argc; j++) {
-               len = strlen(argv[j]) + 1;
-                       /* +1 for terminating null byte */
-
-               if (len + 1 > BUF_SIZE) {
-                   fprintf(stderr,
-                           "Ignoring long message in argument %d\n", j);
-                   continue;
-               }
-
-               if (write(sfd, argv[j], len) != len) {
-                   fprintf(stderr, "partial/failed write\n");
-                   exit(EXIT_FAILURE);
-               }
-
-               nread = read(sfd, buf, BUF_SIZE);
-               if (nread == -1) {
-                   perror("read");
-                   exit(EXIT_FAILURE);
-               }
-
-               printf("Received %zd bytes: %s\n", nread, buf);
-           }
-
-           exit(EXIT_SUCCESS);
-       }
-
-
+	return 0;
+}
