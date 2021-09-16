@@ -1,0 +1,47 @@
+# 忽略没有后缀名的可执行文件 >>>
+# Ignore all
+*
+
+# Unignore all with extensions
+!*.*
+
+# Unignore all dirs
+!*/
+#<<<
+
+# 
+a.out
+*.log
+# it's better to unpack these files and commit the raw source
+# git has its own built in compression methods
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Compiled source #
+###################
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# linux kernel compile files
+.Module.symvers.cmd
+.modules.order.cmd
+*.ko.cmd
+*.mod.cmd
+*.mod.o.cmd
+*.o.cmd
+Module.symvers
+modules.order
+*.ko
+*.mod
+*.mod.c
+
