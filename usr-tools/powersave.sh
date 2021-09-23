@@ -1,4 +1,7 @@
 #!/bin/bash
+# Author: Hao Chen <chenhaoa@uniontech.com>
+# Time	: 2021/9/23
+
 if [ `id -u` != 0 ];then
         echo Permission delay, Please run as root!
         exit
@@ -6,16 +9,27 @@ fi
 
 CAN_USE=false
 
+SERVICE="systemd-journald \
+	NetworkManager \
+	upower.service \
+	com.deepin.userexperience.Daemon.service \
+	deepin-anything-tool.service \
+	runsunloginclient.service \
+	"
 
-#>>>>>>recover
-if [ "$1" = "recover" ]
-then
-	systemctl enable NetworkManager
-	systemctl start NetworkManager
-	nmcli networking on
-	nmcli radio wifi on
-	exit
-fi
+#参数检测
+case $1 in
+	recover )
+		for service in $SERVICE
+		do
+			systemctl enable $service
+			systemctl start $service
+		done
+		nmcli networking on
+		nmcli radio wifi on
+		exit
+	;;
+esac
 
 #Download powertop tools
 dpkg -s powertop > /dev/null
@@ -59,31 +73,33 @@ rfkill block bluetooth
 pkill -ef dde-launcher
 
 #把安全中心杀掉
-sudo pkill -ef deepin-defender-antiav
-#sudo pkill -ef deepin-defender
+pkill -ef deepin-defender-antiav
+#pkill -ef deepin-defender
 
 #把云同步杀掉
-sudo pkill -ef deepin-sync-helper
+pkill -ef deepin-sync-helper
 pkill -ef deepin-deepinid-daemon
 
 #把 upower 停掉
-sudo systemctl stop upower.service
+systemctl stop upower.service
 
 #把用户体验计划程序停掉
-sudo systemctl stop com.deepin.userexperience.Daemon.service
+systemctl stop com.deepin.userexperience.Daemon.service
 
 #把文件搜索服务关掉
-sudo systemctl stop deepin-anything-tool.service
+systemctl stop deepin-anything-tool.service
 
 #把向日葵后台服务关闭
-sudo systemctl stop runsunloginclient.service
+systemctl stop runsunloginclient.service
 
 #chenhao done
 #关掉systemd-journal
-sudo pkill -ef systemd-journal
+pkill -ef systemd-journal
+systemctl stop systemd-journald
+systemctl disable systemd-journald
 
 #配置外设节能Sets all tunable options to their GOOD setting
-sudo powertop --auto-tune
+powertop --auto-tune
 
 #关闭显示器屏幕
 xset dpms force off
