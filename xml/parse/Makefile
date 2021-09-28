@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-g
+CFLAGS=-g -O0
 DLLFLAGS= -lxml2
 EOBJ=./xml
 SOURCE=$(wildcard *.c)
