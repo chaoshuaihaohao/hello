@@ -59,7 +59,18 @@ pkill -ef dde-control-center
 #把 wifi 关掉
 nmcli radio wifi off
 
-#关掉有线网
+#关掉有线网卡
+#IF_NAME=`ip ad | awk -F ': ' '/state UP/ {print $2}'`
+IF_NAME=`ip ad | awk -F ': ' '/UP/ {print $2}'`
+for if in $IF_NAME
+do
+        if [ -d /sys/class/net/$if -a ! -d /sys/class/net/$if/wireless ]
+        then
+                ifconfig $if down
+        fi
+done
+
+#关掉有线网卡
 nmcli networking off
 
 #关掉网络管理服务
@@ -74,7 +85,7 @@ pkill -ef dde-launcher
 
 #把安全中心杀掉
 pkill -ef deepin-defender-antiav
-#pkill -ef deepin-defender
+pkill -ef deepin-defender
 
 #把云同步杀掉
 pkill -ef deepin-sync-helper
@@ -93,6 +104,12 @@ systemctl stop deepin-anything-tool.service
 systemctl stop runsunloginclient.service
 
 #chenhao done
+#关闭虚拟键盘
+pkill -ef onboard
+
+#
+pkill -ef deepin-deepinid
+
 #关掉systemd-journal
 pkill -ef systemd-journal
 systemctl stop systemd-journald
