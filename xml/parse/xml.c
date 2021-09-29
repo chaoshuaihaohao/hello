@@ -95,20 +95,17 @@ int main(int argc, char **argv)
 				node = node->next;
 			else if (node->parent->next)
 				node = node->parent->next;
-			else { //一直往上找到parent->next非空为止
+			else { //一直往上找,直到parent->next非空为止,或parent->next为空且parent=proot为止
 				while (1) {
 					node = node->parent;
-					if (node->next && node->parent != proot) {
+					if (node->next) {
 						node = node->next;
 						break;
-					} else if (node->next && node->parent == proot) {
-						node = node->next;
-						break;
-					} else if (!node->next && node->parent == proot) {
-						node = NULL;
-						break;
-					} else if (!node->next && node->parent != proot) {
-						continue;
+					} else {
+						if (node->parent == proot) {
+							node = NULL;
+							break;
+						}
 					}
 				}
 			}
