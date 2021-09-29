@@ -5,6 +5,17 @@
 #include <libxml/tree.h>
 
 #if 0
+//To turn on/off Debug printf;
+#define __DEBUG_PRINTF__
+#endif
+
+#ifdef __DEBUG_PRINTF__
+#define DEBUG(format,...)           printf(""format"\n",  ##__VA_ARGS__ )
+#else
+#define DEBUG(format,...)
+#endif
+
+#if 0
 /**
  * xmlParser 选项：
  *
@@ -46,7 +57,7 @@ int main(int argc, char **argv)
 	xmlKeepBlanksDefault(0);	//必须加上，防止程序把元素前后的空白文本符号当作一个node
 
 	int options =
-	    XML_PARSE_RECOVER | XML_PARSE_NOENT | XML_PARSE_DTDLOAD |
+	    XML_PARSE_RECOVER | XML_PARSE_NOENT |
 	    XML_PARSE_NOBLANKS | XML_PARSE_XINCLUDE | XML_PARSE_NODICT |
 	    XML_PARSE_NSCLEAN | XML_PARSE_NOCDATA | XML_PARSE_COMPACT |
 	    XML_PARSE_OLD10 | XML_PARSE_OLDSAX | XML_PARSE_HUGE |
@@ -63,7 +74,7 @@ int main(int argc, char **argv)
 		printf("error: file is empty!\n");
 		exit(1);
 	}
-//	printf("proot name:%s\n", (char *)proot->name);
+//      printf("proot name:%s\n", (char *)proot->name);
 
 /*****************遍历所有node of xml tree********************/
 //先遍历node的所有child node,如果全遍历完了,再遍历上一级的next node.
@@ -74,28 +85,31 @@ int main(int argc, char **argv)
 //         3.1--->
 	pcur = proot->xmlChildrenNode;
 	for (node = pcur; node != NULL;) {
-//		if (node)
-//			printf("node->name:%s\n", node->name);
+//              if (node)
+		DEBUG("node->name:%s\n", node->name);
 
-//		printf("node->xmlChildrenNode:%p\n", node->xmlChildrenNode);
-//		printf("node->next:%p\n", node->next);
+		DEBUG("node->xmlChildrenNode:%p\n", node->xmlChildrenNode);
+		DEBUG("node->next:%p\n", node->next);
 #if 1
+//如同标准C中的char类型一样，xmlChar也有动态内存分配，字符串操作等 相关函数。
+//例如xmlMalloc是动态分配内存的函数；xmlFree是配套的释放内存函数；xmlStrcmp是字符串比较函数等。
+//对于char* ch="book", xmlChar* xch=BAD_CAST(ch)或者xmlChar* xch=(const xmlChar *)(ch)
+//对于xmlChar* xch=BAD_CAST("book")，char* ch=(char *)(xch)
 		if (!xmlStrcmp(node->name, BAD_CAST("userinput"))) {
 			printf("%s\n", ((char *)
-					XML_GET_CONTENT
-					(node->xmlChildrenNode)));
+					XML_GET_CONTENT(node->xmlChildrenNode)));	//userinput的子节点就是我们所需要的TEXT。
 		}
 #endif
 		//如果子节点为空，就解析当前节点的下一个节点
-		//	如果下一个节点还是为空，则读当前节点的父节点的下一个节点（父节点不能是proot节点）
+		//      如果下一个节点还是为空，则读当前节点的父节点的下一个节点（父节点不能是proot节点）
 		//如果子节点不为空，继续解析子节点
 		//以TEXT节点为例
-		if (!node->xmlChildrenNode) { // proot->next=proot?
+		if (!node->xmlChildrenNode) {	// proot->next=proot?
 			if (node->next)
 				node = node->next;
 			else if (node->parent->next)
 				node = node->parent->next;
-			else { //一直往上找,直到parent->next非空为止,或parent->next为空且parent=proot为止
+			else {	//一直往上找,直到parent->next非空为止,或parent->next为空且parent=proot为止
 				while (1) {
 					node = node->parent;
 					if (node->next) {
@@ -113,34 +127,6 @@ int main(int argc, char **argv)
 			node = node->xmlChildrenNode;
 		}
 	}
-
-
-//如同标准C中的char类型一样，xmlChar也有动态内存分配，字符串操作等 相关函数。
-//例如xmlMalloc是动态分配内存的函数；xmlFree是配套的释放内存函数；xmlStrcmp是字符串比较函数等。
-//对于char* ch="book", xmlChar* xch=BAD_CAST(ch)或者xmlChar* xch=(const xmlChar *)(ch)
-//对于xmlChar* xch=BAD_CAST("book")，char* ch=(char *)(xch)
-//if (!xmlStrcmp(pcur->name, BAD_CAST("book")))
-#if 0
-	if (!xmlStrcmp(pcur->name, BAD_CAST("screen"))) {
-		xmlNodePtr nptr = pcur->xmlChildrenNode;
-		while (pcur != NULL) {
-			printf("screen: %s\n", ((char *)
-						XML_GET_CONTENT
-						(nptr->
-						 xmlChildrenNode)));
-			if (!xmlStrcmp(nptr->name, BAD_CAST("title"))) {
-				printf("title: %s\n", ((char *)
-						       XML_GET_CONTENT
-						       (nptr->
-							xmlChildrenNode)));
-				break;
-			}
-		}
-
-	}
-#endif
-	//pcur = tmp->parent->next;
-	//pcur = pcur->next;
 
 /*****************释放资源********************/
 	xmlFreeDoc(pdoc);
