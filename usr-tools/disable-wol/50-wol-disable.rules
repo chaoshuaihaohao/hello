@@ -1,0 +1,1 @@
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="r8169", RUN+="/opt/udevScripts/wol-disable.sh"
