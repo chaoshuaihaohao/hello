@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 		printf("error: file is empty!\n");
 		exit(1);
 	}
-	printf("proot name:%s\n", (char *)proot->name);
+//	printf("proot name:%s\n", (char *)proot->name);
 
 /*****************遍历所有node of xml tree********************/
 //先遍历node的所有child node,如果全遍历完了,再遍历上一级的next node.
@@ -74,11 +74,11 @@ int main(int argc, char **argv)
 //         3.1--->
 	pcur = proot->xmlChildrenNode;
 	for (node = pcur; node != NULL;) {
-		if (node)
-			printf("node->name:%s\n", node->name);
+//		if (node)
+//			printf("node->name:%s\n", node->name);
 
-		printf("node->xmlChildrenNode:%p\n", node->xmlChildrenNode);
-		printf("node->next:%p\n", node->next);
+//		printf("node->xmlChildrenNode:%p\n", node->xmlChildrenNode);
+//		printf("node->next:%p\n", node->next);
 #if 1
 		if (!xmlStrcmp(node->name, BAD_CAST("userinput"))) {
 			printf("%s\n", ((char *)
@@ -96,11 +96,19 @@ int main(int argc, char **argv)
 			else if (node->parent->next)
 				node = node->parent->next;
 			else { //一直往上找到parent->next非空为止
-				while (node != proot) {
+				while (1) {
 					node = node->parent;
-					if (node->next) {
+					if (node->next && node->parent != proot) {
 						node = node->next;
 						break;
+					} else if (node->next && node->parent == proot) {
+						node = node->next;
+						break;
+					} else if (!node->next && node->parent == proot) {
+						node = NULL;
+						break;
+					} else if (!node->next && node->parent != proot) {
+						continue;
 					}
 				}
 			}
