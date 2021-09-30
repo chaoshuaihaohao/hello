@@ -24,7 +24,7 @@
 enum {
 	XML_PARSE_RECOVER = 1 << 0,	/* 出错时恢复 */
 	XML_PARSE_NOENT = 1 << 1,	/* 替换实体 */
-	XML_PARSE_DTDLOAD = 1 << 2,	/* 加载外部子集 */
+	XML_PARSE_DTDLOAD = 1 << 2,	/* 加载外部子集 */ //遇到"http://www.oasis-open.org/docbook/xml/4.5/docbookx.dtd"这种会很卡
 	XML_PARSE_DTDATTR = 1 << 3,	/* 默认 DTD 属性 */
 	XML_PARSE_DTDVALID = 1 << 4,	/* 使用 DTD 验证 */
 	XML_PARSE_NOERROR = 1 << 5,	/* 抑制错误报告 */
@@ -58,6 +58,7 @@ int main(int argc, char **argv)
 
 	int options =
 	    XML_PARSE_RECOVER | XML_PARSE_NOENT |
+	    XML_PARSE_NOERROR | XML_PARSE_NOWARNING |
 	    XML_PARSE_NOBLANKS | XML_PARSE_XINCLUDE | XML_PARSE_NODICT |
 	    XML_PARSE_NSCLEAN | XML_PARSE_NOCDATA | XML_PARSE_COMPACT |
 	    XML_PARSE_OLD10 | XML_PARSE_OLDSAX | XML_PARSE_HUGE |
