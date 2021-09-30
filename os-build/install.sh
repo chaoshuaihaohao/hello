@@ -19,18 +19,19 @@ url=$(grep $1 build/pkg/packages.pkg)
 #echo $url
 tar_pkg=$(echo $url | awk -F '/' '{print $NF}')
 #echo $tar_pkg
-pkg_dir=$(echo $tar_pkg | awk -F '.tar.gz' '{print $1}')
+#pkg_dir=$(echo $tar_pkg | awk -F '.tar.gz' '{print $1}')
+pkg_dir=$(echo $tar_pkg | awk -F '.tar' '{print $1}')
 
 #解压软件包
 pushd ./build
-rm -r $pkg_dir
 #清除软件包目录
+rm -rf $pkg_dir
 tar xf $tar_pkg
 pushd $pkg_dir
 sudo bash -e ../cmd/$pkg.cmd
 popd
 #清除软件包目录
-rm -r $pkg_dir
+rm -rf $pkg_dir
 pushd 
 }
 
