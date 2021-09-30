@@ -57,8 +57,23 @@ struct option long_options[] = {
 	{ 0, 0, 0, 0 },
 };
 
+static void usage()
+{
+	printf("Usage:\n"
+	       "	./xml -n <cmd|pkg>\n"
+	       "	cmd:解析.cmd内容\n"
+	       "	pkg:解析.pkg内容\n"
+	       );
+
+}
+
 int main(int argc, char **argv)
 {
+	if (argc <= 2) {
+		usage();
+		return -1;
+	}
+
 	xmlDocPtr pdoc = NULL;
 	xmlNodePtr proot = NULL, pcur = NULL, node = NULL, tmp = NULL;
 
@@ -124,9 +139,16 @@ int main(int argc, char **argv)
 //对于char* ch="book", xmlChar* xch=BAD_CAST(ch)或者xmlChar* xch=(const xmlChar *)(ch)
 //对于xmlChar* xch=BAD_CAST("book")，char* ch=(char *)(xch)
 
-		if (!strcmp(name, "cmd") && !xmlStrcmp(node->name, BAD_CAST("userinput"))) {
-			printf("%s\n", ((char *)
-					XML_GET_CONTENT(node->xmlChildrenNode)));	//userinput的子节点就是我们所需要的TEXT。
+		if (!strcmp(name, "cmd")) {
+			if (!xmlStrcmp(node->name, BAD_CAST("userinput")))
+				printf("%s\n", ((char *)
+						XML_GET_CONTENT(node->xmlChildrenNode)));
+			if (!xmlStrcmp(node->name, BAD_CAST("literal"))) {
+				printf("%s\n", ((char *)
+						XML_GET_CONTENT(node->xmlChildrenNode)));
+				printf("%s\n", ((char *)
+						XML_GET_CONTENT(node->next)));
+			}
 		}
 
 		if (!strcmp(name, "pkg")) {
@@ -138,6 +160,8 @@ int main(int argc, char **argv)
 			if (!xmlStrcmp(node->name, BAD_CAST("literal"))) {
 				printf("%s\n", ((char *)
 						XML_GET_CONTENT(node->xmlChildrenNode)));	//userinput的子节点就是我们所需要的TEXT。
+				printf("%s\n", ((char *)
+						XML_GET_CONTENT(node->next)));
 			}
 			if (!xmlStrcmp(node->name, BAD_CAST("ulink"))) {
 				printf("%s\n", ((char *)
@@ -145,11 +169,14 @@ int main(int argc, char **argv)
 			}
 		}
 #endif
-		//如果子节点为空，就解析当前节点的下一个节点
-		//      如果下一个节点还是为空，则读当前节点的父节点的下一个节点（父节点不能是proot节点）
 		//如果子节点不为空，继续解析子节点
+		//如果子节点为空，就解析当前节点的下一个节点
+		//      如果下一个节点还是为空，说明读到底了；
+		//      则读当前节点的父节点的下一个节点（父节点不能是proot节点）
 		//以TEXT节点为例
-		if (!node->xmlChildrenNode) {	// proot->next=proot?
+		if (node->xmlChildrenNode) {
+			node = node->xmlChildrenNode;
+		} else {
 			if (node->next)
 				node = node->next;
 			else if (node->parent->next)
@@ -163,13 +190,12 @@ int main(int argc, char **argv)
 					} else {
 						if (node->parent == proot) {
 							node = NULL;
+							printf("It is the end of file\n");
 							break;
 						}
 					}
 				}
 			}
-		} else {
-			node = node->xmlChildrenNode;
 		}
 	}
 
