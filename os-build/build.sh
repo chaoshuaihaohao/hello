@@ -80,12 +80,12 @@ case $1 in
 			do
 				XML_NAME=$(basename $file)
 				BASENAME=$(basename -s .xml $XML_NAME)
+				echo parsing $file
 				$XML_PARSE -n cmd $file > $CMD_PATH/$BASENAME.cmd
 				if [ ! -s $CMD_PATH/$BASENAME.cmd ]
 				then
 					rm $CMD_PATH/$BASENAME.cmd
 				fi
-				echo $XML_PARSE $file
 
 			done
 
@@ -135,7 +135,9 @@ case $1 in
 		if [ -z $2 ];then	Usage;exit;	fi
 		;;
 	*)
-		Usage;exit;
+		$0 -x all
+		$0 -d all
+		exit;
 esac
 
 
