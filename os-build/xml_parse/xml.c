@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <unistd.h>
 
 #include <libxml/parser.h>
 #include <libxml/tree.h>
@@ -140,14 +141,17 @@ int main(int argc, char **argv)
 //对于xmlChar* xch=BAD_CAST("book")，char* ch=(char *)(xch)
 
 		if (!strcmp(name, "cmd")) {
-			if (!xmlStrcmp(node->name, BAD_CAST("userinput")))
+			if (!xmlStrcmp(node->name, BAD_CAST("userinput")) &&
+			    !xmlStrcmp(node->parent->name, BAD_CAST("screen")))
 				printf("%s\n", ((char *)
 						XML_GET_CONTENT(node->xmlChildrenNode)));
-			if (!xmlStrcmp(node->name, BAD_CAST("literal"))) {
+			if (!xmlStrcmp(node->name, BAD_CAST("literal")) &&
+			    !xmlStrcmp(node->parent->name, BAD_CAST("userinput"))) {
 				printf("%s\n", ((char *)
 						XML_GET_CONTENT(node->xmlChildrenNode)));
-				printf("%s\n", ((char *)
-						XML_GET_CONTENT(node->next)));
+				if (node->next)
+					printf("%s\n", ((char *)
+							XML_GET_CONTENT(node->next)));
 			}
 		}
 
@@ -155,17 +159,15 @@ int main(int argc, char **argv)
 			if (!xmlStrcmp(node->parent->name, BAD_CAST("listitem")) &&
 			    !xmlStrcmp(node->name, BAD_CAST("para"))) {
 				printf("%s", ((char *)
-						XML_GET_CONTENT(node->xmlChildrenNode)));	//userinput的子节点就是我们所需要的TEXT。
+						XML_GET_CONTENT(node->xmlChildrenNode)));	//para的子节点就是我们所需要的TEXT。
 			}
 			if (!xmlStrcmp(node->name, BAD_CAST("literal"))) {
 				printf("%s\n", ((char *)
-						XML_GET_CONTENT(node->xmlChildrenNode)));	//userinput的子节点就是我们所需要的TEXT。
-				printf("%s\n", ((char *)
-						XML_GET_CONTENT(node->next)));
+						XML_GET_CONTENT(node->xmlChildrenNode)));
 			}
 			if (!xmlStrcmp(node->name, BAD_CAST("ulink"))) {
 				printf("%s\n", ((char *)
-						XML_GET_CONTENT(node->properties->children)));	//userinput的子节点就是我们所需要的TEXT。
+						XML_GET_CONTENT(node->properties->children)));
 			}
 		}
 #endif
@@ -174,31 +176,26 @@ int main(int argc, char **argv)
 		//      如果下一个节点还是为空，说明读到底了；
 		//      则读当前节点的父节点的下一个节点（父节点不能是proot节点）
 		//以TEXT节点为例
-		if (node->xmlChildrenNode) {
+		if (node->xmlChildrenNode)
 			node = node->xmlChildrenNode;
-		} else {
-			if (node->next)
-				node = node->next;
-			else if (node->parent->next)
-				node = node->parent->next;
-			else {	//一直往上找,直到parent->next非空为止,或parent->next为空且parent=proot为止
-				while (1) {
-					node = node->parent;
-					if (node->next) {
-						node = node->next;
-						break;
-					} else {
-						if (node->parent == proot) {
-							node = NULL;
-							printf("It is the end of file\n");
-							break;
-						}
-					}
+		else if (node->next)
+			node = node->next;
+		else {	//一直往上找,直到parent->next非空为止,或parent->next为空且parent=proot为止
+			for (node = node->parent; node != proot; node = node->parent)
+			{
+				if (node->next) {
+					node = node->next;
+					break;
 				}
+			}
+			if (node == proot) {
+				node = NULL;
+				goto __out;
 			}
 		}
 	}
 
+__out:
 /*****************释放资源********************/
 	xmlFreeDoc(pdoc);
 	xmlCleanupParser();

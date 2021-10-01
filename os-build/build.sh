@@ -25,6 +25,7 @@ get_packages()
 {
 #获取安装包
 PACKAGES=`grep -r Download $PKG_PATH/$(basename -s .xml $PKG_FILE).pkg | awk -F ': ' '{print $2}'`
+if [ -z $PACKAGES ];then echo "No packages url found!"; exit; fi
 for pkg in $PACKAGES
 do
 	if [ -z "$1" ];then
@@ -48,6 +49,7 @@ PACKAGES=`grep -r Download $PKG_PATH/$(basename -s .xml $PATCH_FILE).pkg | awk -
 for pkg in $PACKAGES
 do
 	if [ -z "$1" ];then
+			echo download all packages
 		#-N:只获取比本地文件新的文件,避免重复下载
 		wget -N -c $pkg -P $SRC_PATH
 	else
