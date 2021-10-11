@@ -106,6 +106,10 @@ systemctl stop runsunloginclient.service
 #chenhao done
 #关闭虚拟键盘
 pkill -ef onboard
+#TODO关闭fcitx -d
+pkill -ef fcitx
+#关闭deepin-aiassistant
+pkill -ef deepin-aiassistant
 
 #
 pkill -ef deepin-deepinid
