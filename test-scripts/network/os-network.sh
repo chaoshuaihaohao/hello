@@ -1,4 +1,36 @@
 #!/bin/bash
+#/*
+#确认硬件正常
+#	lspci正常识别
+#	/sys/devices成功注册
+#
+#确认驱动正常
+#	lspci -k获取驱动名，并显示驱动名称到终端。
+#	检测/sys/drivers是否成功注册
+#
+#确认firmware正常
+#	根据硬件pid/vid，查询modules.alias/buitin文件，得到驱动名，modinfo驱动模块名获取firmware(builtin如何获取？);
+#	检测/lib/firmware/目录下的文件，判断是否缺少firmware，发出警告。
+#
+#确认驱动和硬件成功匹配并初始化
+#	ip a显示网络接口已生成（或检测/sys/class/net/*接口文件已生成）
+#
+#确认网线正常连接
+#	sudo ethtool $IF获取Link状态
+#
+#确认ip成功获取
+#	ip是存在哪里的？grep -rn "ifa_local =" struct in_ifaddr { <- :struct in_device {
+#
+#确认网卡up后收发包统计正常，未出现rx/tx无法发包
+#
+#确认PHY芯片的寄存器正常
+#
+#确认PHY芯片的接口模式和ACPI规定的一致
+#
+#确认内网认证成功通过
+#
+#*/
+
 LOG=./log
 case "$1" in
 log)
@@ -16,6 +48,19 @@ log)
 	do
 		sudo lspci -xxxvvv -s $PCI_BUS_ID > $LOG/lspci-vvvxxx.txt
 	done
+	#phy寄存器信息
+IF_NAME=$(ip ad | awk -F ': ' '/state/ {print $2}')
+for IF in $IF_NAME
+do
+	#跳过lo网口
+	if [ "$IF" = "lo" ];then continue; fi
+	sudo mii-tool -vvv $IF > $LOG/mii-tool.txt 2>/dev/null
+	for PHY_ID in $(sudo find /sys -name phy_id)
+	do
+		echo "$PHY_ID" >> $LOG/mii-tool.txt
+		cat "$PHY_ID" >> $LOG/mii-tool.txt
+	done
+done
 	#ACPI信息
 	sudo cp /sys/firmware/acpi/tables/DSDT $LOG
 	#内核日志
