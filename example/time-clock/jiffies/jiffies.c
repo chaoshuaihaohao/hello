@@ -1,3 +1,7 @@
+/*
+ * 忙等待
+ * */
+
 #include <linux/module.h>/* Needed by all modules */
 #include <linux/kernel.h>/* Needed for KERN_ALERT */
 #include <linux/init.h>/*Needed for __init */
@@ -14,7 +18,7 @@ static int __init test_init(void)
 	start = jiffies;
 	/* 执行一些任务 */
 	for (i = 0; i < 10; i++) {
-		mdelay(100);	//delay太长时间会造成系统死掉
+		mdelay(100);	//delay太长时间会造成系统卡死
 		i++;
 		i--;
 	}
