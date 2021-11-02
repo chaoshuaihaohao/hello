@@ -27,12 +27,21 @@ int main()
 	int fd = open(dev, O_RDWR, 0664);
 	if (fd < 0)
 		printf("open dev failed\n");
-
+#if 1
 	ret = ioctl(fd, RTC_RD_TIME, &nowtime);
 	if (ret == 0)
 		printf("%d/%d/%d %d:%d %02d\n", nowtime.tm_year + 1900,
 		       nowtime.tm_mon, nowtime.tm_mday, nowtime.tm_hour,
 		       nowtime.tm_min, nowtime.tm_sec);
+#endif
+
+#if 0
+	/* Set the rtc time */
+	nowtime.tm_year = 21;
+	ret = ioctl(fd, RTC_SET_TIME, &nowtime);
+	if (ret)
+		printf("Error: set time failed, %d\n", ret);
+#endif
 
 	float time_use = 0;
 	struct timeval start;
