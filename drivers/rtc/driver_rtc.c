@@ -32,10 +32,10 @@ struct foo_regs {
 #define RTC_YEAR                9
 /* control registers - Moto names
  */
-#define RTC_REG_A		10
-#define RTC_REG_B		11
-#define RTC_REG_C		12
-#define RTC_REG_D		13
+#define RTC_REG_A		0x0A
+#define RTC_REG_B		0x0B
+#define RTC_REG_C		0x0C
+#define RTC_REG_D		0x0D
 /* RTC_*_alarm is always true if 2 MSBs are set */
 #define RTC_ALARM_DONT_CARE    0xC0
 
@@ -135,6 +135,7 @@ static int foo_device_read(struct device *dev, struct foo_regs *regs,
 	printk("time: 20%x/%x/%x %x:%x:%x\n", regs->years, regs->month,
 	       regs->mday, regs->hours, regs->minutes, regs->seconds);
 #endif
+	printk(KERN_ALERT "aie enabled %s\n", (CMOS_READ(RTC_CONTROL) & RTC_AIE) ? "yes" : "no");
 	spin_unlock_irqrestore(&rtc_lock, flags);
 
 	return 0;
@@ -234,6 +235,117 @@ static int fake_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	return write_into_device(dev, &regs, sizeof(regs));
 }
 
+#if 0
+  static int fake_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
+  {
+          unsigned long   flags;
+
+          spin_lock_irqsave(&rtc_lock, flags);
+
+	  if (enabled) {
+		  rtc_control = CMOS_READ(RTC_CONTROL);
+		  rtc_control |= RTC_AIE;
+		  CMOS_WRITE(rtc_control, RTC_CONTROL);
+		  if (device_can_wakeup(dev)) {
+			  acpi_clear_event(ACPI_EVENT_RTC);
+			  acpi_enable_event(ACPI_EVENT_RTC, 0);
+		  }
+
+	  }
+                  cmos_irq_enable(cmos, RTC_AIE);
+          else
+                  cmos_irq_disable(cmos, RTC_AIE);
+
+          spin_unlock_irqrestore(&rtc_lock, flags);
+          return 0;
+  }
+#endif
+
+static int fake_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *t)
+{
+	unsigned char rtc_control;
+
+	printk(KERN_ALERT "%s\n", __func__);
+	spin_lock_irq(&rtc_lock);
+	t->time.tm_sec = CMOS_READ(RTC_SECONDS_ALARM);
+	t->time.tm_min = CMOS_READ(RTC_MINUTES_ALARM);
+	t->time.tm_hour = CMOS_READ(RTC_HOURS_ALARM);
+
+	rtc_control = CMOS_READ(RTC_CONTROL);
+	if (!(rtc_control & RTC_DM_BINARY) || RTC_ALWAYS_BCD) {
+		if (((unsigned)t->time.tm_sec) < 0x60)
+			t->time.tm_sec = bcd2bin(t->time.tm_sec);
+		else
+			t->time.tm_sec = -1;
+		if (((unsigned)t->time.tm_min) < 0x60)
+			t->time.tm_min = bcd2bin(t->time.tm_min);
+		else
+			t->time.tm_min = -1;
+		if (((unsigned)t->time.tm_hour) < 0x24)
+			t->time.tm_hour = bcd2bin(t->time.tm_hour);
+		else
+			t->time.tm_hour = -1;
+
+		if (((unsigned)t->time.tm_mday) <= 0x31)
+			t->time.tm_mday = bcd2bin(t->time.tm_mday);
+		else
+			t->time.tm_mday = -1;
+
+		if (((unsigned)t->time.tm_mon) <= 0x12)
+			t->time.tm_mon = bcd2bin(t->time.tm_mon) - 1;
+		else
+			t->time.tm_mon = -1;
+	}
+
+	t->enabled = !!(rtc_control & RTC_AIE);
+	t->pending = 0;
+	spin_unlock_irq(&rtc_lock);
+
+	return 0;
+}
+
+static int fake_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *t)
+{
+	unsigned char mon, mday, hrs, min, sec, rtc_control;
+
+	printk(KERN_ALERT "%s start\n", __func__);
+
+	mon = t->time.tm_mon + 1;
+	mday = t->time.tm_mday;
+	hrs = t->time.tm_hour;
+	min = t->time.tm_min;
+	sec = t->time.tm_sec;
+
+	spin_lock_irq(&rtc_lock);
+	rtc_control = CMOS_READ(RTC_CONTROL);
+	if (!(rtc_control & RTC_DM_BINARY) || RTC_ALWAYS_BCD) {
+		/* Writing 0xff means "don't care" or "match all".  */
+		mon = (mon <= 12) ? bin2bcd(mon) : 0xff;
+		mday = (mday >= 1 && mday <= 31) ? bin2bcd(mday) : 0xff;
+		hrs = (hrs < 24) ? bin2bcd(hrs) : 0xff;
+		min = (min < 60) ? bin2bcd(min) : 0xff;
+		sec = (sec < 60) ? bin2bcd(sec) : 0xff;
+	}
+
+	rtc_control &= ~RTC_AIE;
+	CMOS_WRITE(rtc_control, RTC_CONTROL);
+
+	/* update alarm */
+	CMOS_WRITE(hrs, RTC_HOURS_ALARM);
+	CMOS_WRITE(min, RTC_MINUTES_ALARM);
+	CMOS_WRITE(sec, RTC_SECONDS_ALARM);
+
+	if (t->enabled) {
+		rtc_control = CMOS_READ(RTC_CONTROL);
+		rtc_control |= RTC_AIE;
+		CMOS_WRITE(rtc_control, RTC_CONTROL);
+	}
+	spin_unlock_irq(&rtc_lock);
+	printk(KERN_ALERT "%s end\n", __func__);
+
+	return 0;
+}
+
 static int fake_rtc_procfs(struct device *dev, struct seq_file *seq)
 {
 	struct rtc_device *rtc = dev_get_drvdata(dev);
@@ -244,22 +356,25 @@ static int fake_rtc_procfs(struct device *dev, struct seq_file *seq)
 	valid = CMOS_READ(RTC_VALID);
 	spin_unlock_irq(&rtc_lock);
 
-	/* NOTE:  at least ICH6 reports battery status using a different
-	 * (non-RTC) bit; and SQWE is ignored on many current systems.
+	/* NOTE:  at least ICH6 reports battery status using a different                                                                                                
+	 * (non-RTC) bit; and SQWE is ignored on many current systems.                                                                                                  
 	 */
 	seq_printf(seq,
 		   "periodic_IRQ\t: %s\n"
-		   "update_IRQ\t: %s\n" "HPET_emulated\t: %s\n"
-		   // "square_wave\t: %s\n"
+		   "update_IRQ\t: %s\n"
+		   "alarm_IRQ enabled\t: %s\n"
+		   "HPET_emulated\t: %s\n"
+		   // "square_wave\t: %s\n"                                                                                                                             
 		   "BCD\t\t: %s\n"
 		   "DST_enable\t: %s\n"
 		   "periodic_freq\t: %d\n"
 		   "batt_status\t: %s\n",
 		   (rtc_control & RTC_PIE) ? "yes" : "no",
 		   (rtc_control & RTC_UIE) ? "yes" : "no",
-		   //use_hpet_alarm() ? "yes" : "no",
+		   (rtc_control & RTC_AIE) ? "yes" : "no",
+		   //use_hpet_alarm() ? "yes" : "no",                                                                                                                     
 		   "no",
-		   // (rtc_control & RTC_SQWE) ? "yes" : "no",
+		   // (rtc_control & RTC_SQWE) ? "yes" : "no",                                                                                                          
 		   (rtc_control & RTC_DM_BINARY) ? "no" : "yes",
 		   (rtc_control & RTC_DST_EN) ? "yes" : "no",
 		   rtc->irq_freq, (valid & RTC_VRT) ? "okay" : "dead");
@@ -282,14 +397,15 @@ static const struct rtc_class_ops fake_rtc_ops = {
 	.read_time = fake_rtc_read_time,
 	.set_time = fake_rtc_set_time,
 //      .alarm_irq_enable = fake_rtc_alarm_irq_enable,
-//	.read_alarm = fake_rtc_read_alarm,
-//	.set_alarm = fake_rtc_set_alarm,
+	.read_alarm = fake_rtc_read_alarm,
+	.set_alarm = fake_rtc_set_alarm,
 	.proc = fake_rtc_procfs,
 };
 
 static int fake_rtc_probe(struct platform_device *pdev)
 {
 	struct rtc_device *rtc;
+	char name[12];
 
 	rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
 				       &fake_rtc_ops, THIS_MODULE);
@@ -297,6 +413,9 @@ static int fake_rtc_probe(struct platform_device *pdev)
 		return PTR_ERR(rtc);
 
 	platform_set_drvdata(pdev, rtc);
+	/* RTC always wakes from S1/S2/S3, and often S4/STD */
+	device_init_wakeup(&pdev->dev, 1);
+
 	printk(KERN_INFO "Fake RTC driver loaded\n");
 
 	return 0;
