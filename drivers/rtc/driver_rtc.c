@@ -6,6 +6,7 @@
 #include <linux/err.h>
 #include <linux/rtc.h>
 #include <asm/io.h>
+#include <linux/acpi.h>
 
 struct foo_regs {
 	int seconds;
@@ -115,7 +116,6 @@ static int foo_device_read(struct device *dev, struct foo_regs *regs,
 {
 	unsigned long flags;
 
-	printk(KERN_ALERT "read date\n");
 	spin_lock_irqsave(&rtc_lock, flags);
 	regs->seconds = CMOS_READ(RTC_SECONDS);
 	regs->minutes = CMOS_READ(RTC_MINUTES);
@@ -124,7 +124,7 @@ static int foo_device_read(struct device *dev, struct foo_regs *regs,
 	regs->wday = CMOS_READ(RTC_DAY_OF_WEEK);
 	regs->month = CMOS_READ(RTC_MONTH);
 	regs->years = CMOS_READ(RTC_YEAR);
-#if 1
+#if 0
 	printk("regs->seconds = %x\n", regs->seconds);
 	printk("regs->minutes = %x\n", regs->minutes);
 	printk("regs->hours = %x\n", regs->hours);
@@ -135,7 +135,6 @@ static int foo_device_read(struct device *dev, struct foo_regs *regs,
 	printk("time: 20%x/%x/%x %x:%x:%x\n", regs->years, regs->month,
 	       regs->mday, regs->hours, regs->minutes, regs->seconds);
 #endif
-	printk(KERN_ALERT "aie enabled %s\n", (CMOS_READ(RTC_CONTROL) & RTC_AIE) ? "yes" : "no");
 	spin_unlock_irqrestore(&rtc_lock, flags);
 
 	return 0;
@@ -165,7 +164,7 @@ static int fake_rtc_read_time(struct device *dev, struct rtc_time *tm)
 * But rtc_time.tm_month expect a months 0 to 11.
 * So we need to subtract 1 to the value returned by the chip
 */
-	tm->tm_mon = bcd2bin(regs.month);
+	tm->tm_mon = bcd2bin(regs.month) - 1;
 /*
 * This device's Epoch is 2000.
 * But rtc_time.tm_year expect years from Epoch 1900.
@@ -178,7 +177,6 @@ static int fake_rtc_read_time(struct device *dev, struct rtc_time *tm)
 static int write_into_device(struct device *dev, struct foo_regs *regs,
 			     int size)
 {
-	printk(KERN_ALERT "write info device\n");
 	CMOS_WRITE(regs->seconds, RTC_SECONDS);
 	CMOS_WRITE(regs->minutes, RTC_MINUTES);
 	CMOS_WRITE(regs->hours, RTC_HOURS);
@@ -193,7 +191,7 @@ static int fake_rtc_set_time(struct device *dev, struct rtc_time *tm)
 {
 	struct foo_regs regs;
 
-	printk(KERN_ALERT "write date\n");
+	printk(KERN_ALERT "%s\n", __func__);
 	regs.seconds = bin2bcd(tm->tm_sec);
 	regs.minutes = bin2bcd(tm->tm_min);
 	regs.hours = bin2bcd(tm->tm_hour);
@@ -235,31 +233,25 @@ static int fake_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	return write_into_device(dev, &regs, sizeof(regs));
 }
 
-#if 0
-  static int fake_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
-  {
-          unsigned long   flags;
+static int fake_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
+{
+	unsigned char rtc_control;
+	unsigned long flags;
 
-          spin_lock_irqsave(&rtc_lock, flags);
+	spin_lock_irqsave(&rtc_lock, flags);
+	if (enabled) {
+		rtc_control = CMOS_READ(RTC_CONTROL);
+		rtc_control |= RTC_AIE;
+		CMOS_WRITE(rtc_control, RTC_CONTROL);
+		if (device_can_wakeup(dev)) {
+			acpi_clear_event(ACPI_EVENT_RTC);
+			acpi_enable_event(ACPI_EVENT_RTC, 0);
+		}
+	}
+	spin_unlock_irqrestore(&rtc_lock, flags);
 
-	  if (enabled) {
-		  rtc_control = CMOS_READ(RTC_CONTROL);
-		  rtc_control |= RTC_AIE;
-		  CMOS_WRITE(rtc_control, RTC_CONTROL);
-		  if (device_can_wakeup(dev)) {
-			  acpi_clear_event(ACPI_EVENT_RTC);
-			  acpi_enable_event(ACPI_EVENT_RTC, 0);
-		  }
-
-	  }
-                  cmos_irq_enable(cmos, RTC_AIE);
-          else
-                  cmos_irq_disable(cmos, RTC_AIE);
-
-          spin_unlock_irqrestore(&rtc_lock, flags);
-          return 0;
-  }
-#endif
+	return 0;
+}
 
 static int fake_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *t)
 {
@@ -273,10 +265,15 @@ static int fake_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *t)
 
 	rtc_control = CMOS_READ(RTC_CONTROL);
 	if (!(rtc_control & RTC_DM_BINARY) || RTC_ALWAYS_BCD) {
-		if (((unsigned)t->time.tm_sec) < 0x60)
+		printk(KERN_ALERT "%s 111\n", __func__);
+		if (((unsigned)t->time.tm_sec) < 0x60) {
 			t->time.tm_sec = bcd2bin(t->time.tm_sec);
-		else
+			printk(KERN_ALERT "%s start\n", __func__);
+		}
+		else {
+			printk(KERN_ALERT "%s end\n", __func__);
 			t->time.tm_sec = -1;
+		}
 		if (((unsigned)t->time.tm_min) < 0x60)
 			t->time.tm_min = bcd2bin(t->time.tm_min);
 		else
@@ -287,7 +284,7 @@ static int fake_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *t)
 			t->time.tm_hour = -1;
 
 		if (((unsigned)t->time.tm_mday) <= 0x31)
-			t->time.tm_mday = bcd2bin(t->time.tm_mday);
+			t->time.tm_mday = bcd2bin(t->time.tm_mday) - 1;
 		else
 			t->time.tm_mday = -1;
 
@@ -310,7 +307,7 @@ static int fake_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *t)
 
 	printk(KERN_ALERT "%s start\n", __func__);
 
-	mon = t->time.tm_mon + 1;
+	mon = t->time.tm_mon;
 	mday = t->time.tm_mday;
 	hrs = t->time.tm_hour;
 	min = t->time.tm_min;
@@ -362,8 +359,7 @@ static int fake_rtc_procfs(struct device *dev, struct seq_file *seq)
 	seq_printf(seq,
 		   "periodic_IRQ\t: %s\n"
 		   "update_IRQ\t: %s\n"
-		   "alarm_IRQ enabled\t: %s\n"
-		   "HPET_emulated\t: %s\n"
+		   "alarm_IRQ enabled\t: %s\n" "HPET_emulated\t: %s\n"
 		   // "square_wave\t: %s\n"                                                                                                                             
 		   "BCD\t\t: %s\n"
 		   "DST_enable\t: %s\n"
@@ -396,7 +392,7 @@ static int fake_rtc_procfs(struct device *dev, struct seq_file *seq)
 static const struct rtc_class_ops fake_rtc_ops = {
 	.read_time = fake_rtc_read_time,
 	.set_time = fake_rtc_set_time,
-//      .alarm_irq_enable = fake_rtc_alarm_irq_enable,
+	.alarm_irq_enable = fake_rtc_alarm_irq_enable,
 	.read_alarm = fake_rtc_read_alarm,
 	.set_alarm = fake_rtc_set_alarm,
 	.proc = fake_rtc_procfs,
@@ -405,7 +401,7 @@ static const struct rtc_class_ops fake_rtc_ops = {
 static int fake_rtc_probe(struct platform_device *pdev)
 {
 	struct rtc_device *rtc;
-	char name[12];
+	int retval = 0;
 
 	rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
 				       &fake_rtc_ops, THIS_MODULE);
@@ -416,9 +412,29 @@ static int fake_rtc_probe(struct platform_device *pdev)
 	/* RTC always wakes from S1/S2/S3, and often S4/STD */
 	device_init_wakeup(&pdev->dev, 1);
 
-	printk(KERN_INFO "Fake RTC driver loaded\n");
+	spin_lock_irq(&rtc_lock);
+	/* Ensure that the RTC is accessible. Bit 6 must be 0! */
+	if ((CMOS_READ(RTC_VALID) & 0x40) != 0) {
+		spin_unlock_irq(&rtc_lock);
+		printk("not accessible\n");
+		retval = -ENXIO;
+		goto cleanup1;
+	}
 
-	return 0;
+	/* force periodic irq to CMOS reset default of 1024Hz;
+	 *
+	 * REVISIT it's been reported that at least one x86_64 ALI
+	 * mobo doesn't use 32KHz here ... for portability we might
+	 * need to do something about other clock frequencies.
+	 */
+	rtc->irq_freq = 1024;
+	CMOS_WRITE(RTC_REF_CLCK_32KHZ | 0x06, RTC_FREQ_SELECT);
+
+cleanup1:
+	spin_unlock_irq(&rtc_lock);
+
+	printk(KERN_INFO "Fake RTC driver loaded\n");
+	return retval;
 }
 
 static struct platform_driver fake_rtc_drv = {

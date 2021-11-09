@@ -30,7 +30,7 @@ static time_t rtc_time_to_ctime(const struct rtc_time rt)
 	return mktime(&tm);
 }
 
-static char *tm_to_string(const struct tm tm)
+static char *tm_to_string(struct tm tm)
 {
 	time_t tmp;
 	tmp = mktime(&tm);
@@ -478,10 +478,10 @@ int main()
 #endif
 
 #if 1
-	time_t now;
-	now = alarm + 100000000;
-	time(&now);
-	setup_alarm(fd, &now);
+//	time_t now;
+//	now = alarm + 100000000;
+//	time(&now);
+//	setup_alarm(fd, &now);
 #endif
 	float time_use = 0;
 	struct timeval start;
