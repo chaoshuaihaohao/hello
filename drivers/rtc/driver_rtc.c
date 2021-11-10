@@ -8,6 +8,9 @@
 #include <asm/io.h>
 #include <linux/acpi.h>
 
+  /* this is for "generic access to PC-style RTC" using CMOS_READ/CMOS_WRITE */
+//#include <linux/mc146818rtc.h>
+
 struct foo_regs {
 	int seconds;
 	int minutes;
@@ -269,8 +272,7 @@ static int fake_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *t)
 		if (((unsigned)t->time.tm_sec) < 0x60) {
 			t->time.tm_sec = bcd2bin(t->time.tm_sec);
 			printk(KERN_ALERT "%s start\n", __func__);
-		}
-		else {
+		} else {
 			printk(KERN_ALERT "%s end\n", __func__);
 			t->time.tm_sec = -1;
 		}
@@ -359,7 +361,7 @@ static int fake_rtc_procfs(struct device *dev, struct seq_file *seq)
 	seq_printf(seq,
 		   "periodic_IRQ\t: %s\n"
 		   "update_IRQ\t: %s\n"
-		   "alarm_IRQ enabled\t: %s\n" "HPET_emulated\t: %s\n"
+		   "alarm_IRQ\t: %s\n" "HPET_emulated\t: %s\n"
 		   // "square_wave\t: %s\n"                                                                                                                             
 		   "BCD\t\t: %s\n"
 		   "DST_enable\t: %s\n"
@@ -374,6 +376,13 @@ static int fake_rtc_procfs(struct device *dev, struct seq_file *seq)
 		   (rtc_control & RTC_DM_BINARY) ? "no" : "yes",
 		   (rtc_control & RTC_DST_EN) ? "yes" : "no",
 		   rtc->irq_freq, (valid & RTC_VRT) ? "okay" : "dead");
+
+	return 0;
+}
+
+static irqreturn_t fake_rtc_interrupt(int irq, void *p)
+{
+	printk(KERN_ALERT "%s %d\n", __func__, irq);
 
 	return 0;
 }
@@ -398,10 +407,122 @@ static const struct rtc_class_ops fake_rtc_ops = {
 	.proc = fake_rtc_procfs,
 };
 
+static void acpi_evaluate(void)
+{
+	acpi_handle handle;
+	acpi_status status;
+	struct acpi_object_list input;
+	//union acpi_object in_params[4];
+	union acpi_object in_params;
+	union acpi_object *out_obj, *cpc_obj;
+	unsigned int num_ent;
+	guid_t guid;
+	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
+
+	if (ACPI_FAILURE
+	    (acpi_get_handle(NULL, "\\_SB.PCI0.LPCB.RTC_", &handle))) {
+		printk(KERN_ALERT "%s: acpi_get_handle failed\n", __func__);
+		return;
+	}
+
+	/* Setting up input parameters */
+	input.count = 0;	//输入参数的个数。ACPI表显示method不需要输入参数
+	input.pointer = NULL;
+#if 0
+//      in_params.type               = ACPI_TYPE_INTEGER;
+//      in_params.integer.value      = ;
+//      in_params[2].type               = ACPI_TYPE_INTEGER;
+//      in_params[2].integer.value      = context->cap.length/sizeof(u32);
+#endif
+	if (acpi_has_method(handle, "_STA")) {
+		printk(KERN_ALERT "has handle\n");
+	} else
+		printk(KERN_ALERT "not has handle\n");
+
+	status = acpi_evaluate_object(handle, "_STA", &input, &output);
+	if (ACPI_FAILURE(status)) {
+		printk(KERN_ALERT "%s: acpi_evaluate_object failed\n",
+		       __func__);
+		return;
+
+	}
+
+	if (output.pointer) {
+		out_obj = (union acpi_object *)output.pointer;
+#if 1
+		/* First entry is NumEntries. */
+		if (out_obj->integer.type == ACPI_TYPE_INTEGER) {
+			num_ent = out_obj->integer.value;
+			printk(KERN_ALERT "num_ent = %d\n", num_ent);
+		} else {
+			printk("Unexpected entry type(%d) for NumEntries\n",
+			       out_obj->integer.type);
+		}
+#endif
+	}
+	//cpc_ptr->num_entries = num_ent;
+	printk(KERN_ALERT "%p\n", output.pointer);
+	printk(KERN_ALERT "%llu\n", output.length);
+
+	return;
+}
+
+static void acpi_evaluate_1(void)
+{
+	acpi_handle handle;
+	acpi_status status;
+	struct acpi_object_list input;
+	union acpi_object in_params;
+	union acpi_object *out_obj;
+	unsigned int num_ent;
+	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
+
+	if (ACPI_FAILURE
+	    (acpi_get_handle(NULL, "\\_SB_.PCI0.PC_B", &handle))) {
+		printk(KERN_ALERT "%s: acpi_get_handle failed\n", __func__);
+		return;
+	}
+
+	/* Setting up input parameters */
+	input.count = 0;	//输入参数的个数。ACPI表显示method不需要输入参数
+	input.pointer = NULL;
+
+	if (acpi_has_method(handle, "GPCB")) {
+		printk(KERN_ALERT "has handle\n");
+	} else
+		printk(KERN_ALERT "not has handle\n");
+
+	status = acpi_evaluate_object(handle, "GPCB", &input, &output);
+	if (ACPI_FAILURE(status)) {
+		printk(KERN_ALERT "%s: acpi_evaluate_object failed\n",
+		       __func__);
+		return;
+	}
+
+	if (output.pointer) {
+		out_obj = (union acpi_object *)output.pointer;
+		/* First entry is NumEntries. */
+		if (out_obj->integer.type == ACPI_TYPE_INTEGER) {
+			num_ent = out_obj->integer.value;
+			printk(KERN_ALERT "num_ent = %d\n", num_ent);
+		} else {
+			printk("Unexpected entry type(%d) for NumEntries\n",
+			       out_obj->integer.type);
+		}
+	}
+	printk(KERN_ALERT "%p\n", output.pointer);
+	printk(KERN_ALERT "%d\n", output.length);
+
+	return;
+}
+
 static int fake_rtc_probe(struct platform_device *pdev)
 {
 	struct rtc_device *rtc;
 	int retval = 0;
+
+	acpi_evaluate();
+	acpi_evaluate_1();
 
 	rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
 				       &fake_rtc_ops, THIS_MODULE);
@@ -430,9 +551,20 @@ static int fake_rtc_probe(struct platform_device *pdev)
 	rtc->irq_freq = 1024;
 	CMOS_WRITE(RTC_REF_CLCK_32KHZ | 0x06, RTC_FREQ_SELECT);
 
+#if 0
+#define RTC_IRQ 8
+	unsigned int rtc_irq = RTC_IRQ + 20;
+	irq_handler_t rtc_cmos_int_handler;
+	rtc_cmos_int_handler = fake_rtc_interrupt;
+	retval = request_irq(rtc_irq, rtc_cmos_int_handler,
+			     0, dev_name(&rtc->dev), rtc);
+	if (retval < 0) {
+		printk(KERN_ERR "IRQ %d is already in use\n", rtc_irq);
+		goto cleanup1;
+	}
+#endif
 cleanup1:
 	spin_unlock_irq(&rtc_lock);
-
 	printk(KERN_INFO "Fake RTC driver loaded\n");
 	return retval;
 }
@@ -447,5 +579,5 @@ static struct platform_driver fake_rtc_drv = {
 
 module_platform_driver_probe(fake_rtc_drv, fake_rtc_probe);
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("John Madieu <john.madieu@gmail.com>");
+MODULE_AUTHOR("Hao Chen <947481900@qq.com>");
 MODULE_DESCRIPTION("Fake RTC driver description");
