@@ -8,50 +8,161 @@
 #include <linux/etherdevice.h>
 #include <linux/firmware.h>
 
+#include "hal_com_reg.h"
+#include "hal8710breg.h"
+#include "rtl8710b_spec.h"
 #include "rtl8188.h"
-#define DRV_VERSION "v1.0"
-#define R8188_FW_NAME       "9170-1.fw"
-#define CONFIG_EMBEDDED_FWIMG
-  #define FW_8710B_SIZE           0x8000
-  #define FW_8710B_START_ADDRESS  0x1000
-  #define FW_8710B_END_ADDRESS    0x1FFF /* 0x5FFF */
+#if 1
 
-#define MAX_DLFW_PAGE_SIZE                      4096	/* @ page : 4k bytes */
-typedef enum _firmware_source {
-	fw_source_img_file = 0,
-	fw_source_header_file = 1,	/* from header file */
-} firmware_source, *pfirmware_source;
-
-#define FW_8710B_SIZE         0x8000
-typedef struct _rt_firmware {
-	firmware_source efwsource;
-#ifdef CONFIG_EMBEDDED_FWIMG
-	unsigned int *szfwbuffer;
+#if defined(CONFIG_VENDOR_REQ_RETRY) && defined(CONFIG_USB_VENDOR_REQ_MUTEX)
+	  /* vendor req retry should be in the situation when each vendor req is atomically submitted from others */
+#define MAX_USBCTRL_VENDORREQ_TIMES     10
 #else
-	unsigned int szfwbuffer[FW_8710B_SIZE];
+#define MAX_USBCTRL_VENDORREQ_TIMES     1
 #endif
-	unsigned long ulfwlength;
-} rt_firmware_8710b, *prt_firmware_8710b;
 
-struct rtl8188_priv {
-	struct usb_device *udev;
-	struct usb_interface *intf;
-	struct {
-		const struct firmware *fw;
-		unsigned long firmware_size;
-          unsigned short firmware_version;
-          unsigned short     FirmwareVersionRev;
-          unsigned short firmware_sub_version;
-          unsigned short     FirmwareSignature;
-          unsigned int      RegFWOffload;
-          unsigned int      bFWReady;
-          unsigned int      bBTFWReady;
-          unsigned int      fw_ractrl;
-          unsigned int      LastHMEBoxNum;  /* H2C - for host message to fw */
+#define REALTEK_USB_VENQT_READ          0xC0
+#define REALTEK_USB_VENQT_WRITE 0x40
+#define REALTEK_USB_VENQT_CMD_REQ       0x05
+#define REALTEK_USB_VENQT_CMD_IDX       0x00
+#define REALTEK_USB_IN_INT_EP_IDX       1
 
-	} fw;
+#define RTW_USB_CONTROL_MSG_TIMEOUT     500	/* ms */
 
-};
+#define VENDOR_CMD_MAX_DATA_LEN 254
+#define FW_START_ADDRESS        0x1000
+
+#define ALIGNMENT_UNIT                          16
+
+static int usbctrl_vendorreq(struct usb_device *udev, u8 request, u16 value,
+			     u16 index, void *pdata, u16 len, u8 requesttype)
+{
+	int vendorreq_times = 0;
+	unsigned int pipe;
+	u8 reqtype;
+	u8 *pIo_buf;
+	int status = 0;
+
+	pIo_buf = kzalloc((u32) len + ALIGNMENT_UNIT, GFP_KERNEL);
+	if (pIo_buf == NULL) {
+		dev_info(&udev->dev, "[%s] pIo_buf == NULL\n", __FUNCTION__);
+		return -ENOMEM;
+	}
+
+	while (++vendorreq_times <= MAX_USBCTRL_VENDORREQ_TIMES) {
+		memset(pIo_buf, 0, len);
+
+		if (requesttype == 0x01) {
+			pipe = usb_rcvctrlpipe(udev, 0);	/* read_in */
+			reqtype = REALTEK_USB_VENQT_READ;
+		} else {
+			pipe = usb_sndctrlpipe(udev, 0);	/* write_out */
+			reqtype = REALTEK_USB_VENQT_WRITE;
+			memcpy(pIo_buf, pdata, len);
+		}
+
+		status =
+		    usb_control_msg(udev, pipe, request, reqtype, value,
+				    index, pIo_buf, len,
+				    RTW_USB_CONTROL_MSG_TIMEOUT);
+
+		if (status == len) {	/* Success this control transfer. */
+			//      rtw_reset_continual_io_error(pdvobjpriv);
+			if (requesttype == 0x01) {
+				/* For Control read transfer, we have to copy the read data from pIo_buf to pdata. */
+				memcpy(pdata, pIo_buf, len);
+			}
+		} else {	/* error cases */
+			dev_info(&udev->dev,
+				 "reg 0x%x, usb %s %u fail, status:%d value=0x%x, vendorreq_times:%d\n",
+				 value,
+				 (requesttype == 0x01) ? "read" : "write", len,
+				 status, *(u32 *) pdata, vendorreq_times);
+
+			if (status < 0) {
+				dev_info(&udev->dev, "%s:status < 0\n",
+					 __func__);
+			} else {	/* status != len && status >= 0 */
+				if (status > 0) {
+					if (requesttype == 0x01) {
+						/* For Control read transfer, we have to copy the read data from pIo_buf to pdata. */
+						memcpy(pdata, pIo_buf, len);
+					}
+				}
+			}
+		}
+
+		/* firmware download is checksumed, don't retry */
+		if ((value >= FW_START_ADDRESS) || status == len)
+			break;
+	}
+
+	return status;
+}
+
+static int usb_write(struct usb_device *udev, u32 addr, u8 val, u8 len)
+{
+	u8 request;
+	u8 requesttype;
+	u16 wvalue;
+	u16 index;
+	u8 data;
+	int ret;
+
+	request = 0x05;
+	requesttype = 0x00;	/* write_out */
+	index = 0;		/* n/a */
+
+	wvalue = (u16) (addr & 0x0000ffff);
+	len = len / 8;
+
+	/* WLANON PAGE0_REG needs to add an offset 0x8000 */
+//#if defined(CONFIG_RTL8710B)
+	if (wvalue >= 0x0000 && wvalue < 0x0100)
+		wvalue |= 0x8000;
+//#endif
+
+	data = val;
+	ret = usbctrl_vendorreq(udev, request, wvalue, index,
+				&data, len, requesttype);
+
+	return ret;
+}
+
+#define usb_write8(udev, addr, val) usb_write(udev, addr, val, 8)
+#define usb_write16(udev, addr, val) usb_write(udev, addr, val, 16)
+#define usb_write32(udev, addr, val) usb_write(udev, addr, val, 32)
+
+u8 usb_read(struct usb_device *udev, u32 addr, u8 len)
+{
+	u8 request;
+	u8 requesttype;
+	u16 wvalue;
+	u16 index;
+	u8 data = 0;
+
+	request = 0x05;
+	requesttype = 0x01;	/* read_in */
+	index = 0;		/* n/a */
+
+	wvalue = (u16) (addr & 0x0000ffff);
+	len = len / 8;
+
+	/* WLANON PAGE0_REG needs to add an offset 0x8000 */
+	if (wvalue >= 0x0000 && wvalue < 0x0100)
+		wvalue |= 0x8000;
+
+	usbctrl_vendorreq(udev, request, wvalue, index,
+			  &data, len, requesttype);
+
+	return data;
+}
+
+#define usb_read8(udev, addr) usb_read(udev, addr, 8)
+#define usb_read16(udev, addr) usb_read(udev, addr, 16)
+#define usb_read32(udev, addr) usb_read(udev, addr, 32)
+
+#endif
 
 //static struct dvobj_priv *usb_dvobj_init(struct usb_interface *intf)
 static int *usb_dvobj_init(struct usb_interface *intf)
@@ -187,71 +298,89 @@ static const struct usb_device_id rtl8188_table[] = {
 	{ }
 };
 
-#if 0
-  int usb_write32(struct intf_hdl *pintfhdl, unsigned long addr, unsigned long val)
-  {
-          unsigned int request;
-          unsigned int requesttype;
-          unsigned short wvalue;
-          unsigned short index;
-          unsigned short len;
-          unsigned long data;
-          int ret;
-
-
-          request = 0x05;
-          requesttype = 0x00;/* write_out */
-          index = 0;/* n/a */
-
-          wvalue = (unsigned short)(addr & 0x0000ffff);
-          len = 4;
-
-  /* WLANON PAGE0_REG needs to add an offset 0x8000 */
-  #if defined(CONFIG_RTL8710B)
-          if(wvalue >= 0x0000 && wvalue < 0x0100)
-                  wvalue |= 0x8000;
-  #endif
-
-          data = val;
-          ret = usbctrl_vendorreq(pintfhdl, request, wvalue, index,
-                                  &data, len, requesttype);
-
-
-          return ret;
-
-  }
-#endif
-
 static int rtl8188_parse_firmware(struct rtl8188_priv *priv)
 {
 	const struct firmware *fw = priv->fw.fw;
-	prt_firmware_8710b      pfirmware = NULL;
+	struct usb_device *udev = priv->udev;
+	PRT_FIRMWARE_8710B pFirmware = NULL;
+	PRT_8710B_FIRMWARE_HDR pFwHdr = NULL;
+	u32 FirmwareLen;
+	u8 *pFirmwareBuf;
 
-	if (WARN_ON(!fw))
-		return -EINVAL;
+//      if (WARN_ON(!fw))
+//              return -EINVAL;
 
-	pfirmware = (prt_firmware_8710b)kzalloc(sizeof(rt_firmware_8710b), GFP_KERNEL);
-	if (!pfirmware)
+	pFirmware =
+	    (PRT_FIRMWARE_8710B) kzalloc(sizeof(RT_FIRMWARE_8710B), GFP_KERNEL);
+	if (!pFirmware)
 		return -ENOMEM;
 
 #ifdef CONFIG_WOWLAN
-	pfirmware->szfwbuffer = array_mp_8710b_fw_wowlan;
-	pfirmware->ulfwlength = array_length_mp_8710b_fw_wowlan;
+	pFirmware->szFwBuffer = array_mp_8710b_fw_wowlan;
+	pFirmware->ulFwLength = array_length_mp_8710b_fw_wowlan;
 #else
-	pfirmware->szfwbuffer = array_mp_8710b_fw_nic;
-	pfirmware->ulfwlength =	array_length_mp_8710b_fw_nic;
+	pFirmware->szFwBuffer = array_mp_8710b_fw_nic;
+	pFirmware->ulFwLength = array_length_mp_8710b_fw_nic;
 #endif
+
+	if ((pFirmware->ulFwLength - 32) > FW_8710B_SIZE) {
+		dev_err(&priv->udev->dev, "Firmware size:%u exceed %u\n",
+			pFirmware->ulFwLength, FW_8710B_SIZE);
+		return -EINVAL;
+	}
+//      priv->fw.firmware_size = 
+
+	pFirmwareBuf = pFirmware->szFwBuffer;
+	FirmwareLen = pFirmware->ulFwLength;
+	/* To Check Fw header. Added by tynli. 2009.12.04. */
+	pFwHdr = (PRT_8710B_FIRMWARE_HDR) pFirmwareBuf;
+
+	priv->fw.firmware_version = le16_to_cpu(pFwHdr->Version);
+	priv->fw.firmware_sub_version = le16_to_cpu(pFwHdr->Subversion);
+	priv->fw.FirmwareSignature = le16_to_cpu(pFwHdr->Signature);
+
+	dev_info(&priv->udev->dev,
+		 "%s: fw_ver=%x fw_subver=%04x sig=0x%x, Month=%02x, Date=%02x, Hour=%02x, Minute=%02x\n",
+		 __func__, priv->fw.firmware_version,
+		 priv->fw.firmware_sub_version, priv->fw.FirmwareSignature,
+		 pFwHdr->Month, pFwHdr->Date, pFwHdr->Hour, pFwHdr->Minute);
+
+	if ((priv->fw.version_id.VendorType == CHIP_VENDOR_UMC
+	     && priv->fw.FirmwareSignature == 0x10B1) ||
+	    (priv->fw.version_id.VendorType == CHIP_VENDOR_SMIC
+	     && priv->fw.FirmwareSignature == 0x10B1)) {
+		dev_info(&priv->udev->dev, "%s: Shift for fw header!\n",
+			 __FUNCTION__);
+		/* Shift 32 bytes for FW header */
+		pFirmwareBuf = pFirmwareBuf + 32;
+		FirmwareLen = FirmwareLen - 32;
+	} else {
+		dev_err(&priv->udev->dev,
+			"%s: Error! No shift for fw header! %04x\n",
+			__FUNCTION__, priv->fw.FirmwareSignature);
+	}
+
+	/* To check if FW already exists before download FW */
+	if (usb_read8(udev, REG_8051FW_CTRL_V1_8710B | PAGE0_OFFSET) &
+	    RAM_DL_SEL) {
+		dev_info(&udev->dev, "%s: FW exists before download FW\n",
+			 __func__);
+		usb_write8(udev, REG_8051FW_CTRL_V1_8710B | PAGE0_OFFSET, 0x00);
+		//      _8051Reset8710(padapter);
+	} else
+		dev_info(&udev->dev, "%s: FW not exists before download FW\n",
+			 __func__);
 
 	return 0;
 }
 
- static void rtl8188_release_firmware(struct rtl8188_priv *priv)
-  {
-          if (priv->fw.fw) {
-                  release_firmware(priv->fw.fw);
-                  memset(priv->fw.fw, 0, sizeof(struct firmware));
-          }
-  }
+static void rtl8188_release_firmware(struct rtl8188_priv *priv)
+{
+	if (priv->fw.fw) {
+		release_firmware(priv->fw.fw);
+		memset(priv->fw.fw, 0, sizeof(struct firmware));
+	}
+}
 
 static int rtl8188_usb_firmware_finish(struct rtl8188_priv *priv)
 {
@@ -273,12 +402,13 @@ static void r8188_fw_callback(const struct firmware *fw, void *context)
 {
 	struct rtl8188_priv *priv = context;
 
-	if (fw) {
-		priv->fw.fw = fw;
-		rtl8188_usb_firmware_finish(priv);
-	}
-
 	printk(KERN_ALERT "%s\n", __func__);
+//      if (fw) {
+//              priv->fw.fw = fw;
+//              rtl8188_usb_firmware_finish(priv);
+//      }
+	rtl8188_usb_firmware_finish(priv);
+
 }
 
 static void rtl8188_disconnect(struct usb_interface *intf)
@@ -328,6 +458,13 @@ static int rtl8188_probe(struct usb_interface *intf,
 
 	request_firmware_nowait(THIS_MODULE, 1, R8188_FW_NAME, &priv->udev->dev,
 				GFP_KERNEL, priv, r8188_fw_callback);
+#if 0
+	if (request_firmware(&fw_entry, $FIRMWARE, device) == 0) {	/*从用户空间请求映像数据 */
+		/*将固件映像拷贝到硬件的存储器，拷贝函数由用户编写 */
+		copy_fw_to_device(fw_entry->data, fw_entry->size);
+		release(fw_entry);
+	}
+#endif
 __end:
 
 	return 0;
