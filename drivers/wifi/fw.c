@@ -13,9 +13,6 @@
 *
 ******************************************************************************/
 
-#ifndef _R8188_FW_H_
-#define _R8188_FW_H_
-
 unsigned int array_mp_8710b_fw_ap[] = {
 	0xB1, 0x10, 0x20, 0x00, 0x10, 0x00, 0x00, 0x00,
 	0x09, 0x15, 0x14, 0x50, 0xD8, 0x52, 0x02, 0x00,
@@ -8863,5 +8860,3 @@ unsigned int array_mp_8710b_fw_wowlan[] = {
 };
 
 unsigned long array_length_mp_8710b_fw_wowlan = 25666;
-
-#endif
