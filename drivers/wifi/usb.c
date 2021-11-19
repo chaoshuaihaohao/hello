@@ -531,12 +531,50 @@ static void rtl8188_parse_firmware(struct rtl8188_priv *priv)
 
 static struct usb_driver rtl8188_usb_wifi_driver;
 
+static int test_rtl8188_fw_info(struct rtl8188_priv *priv)
+{
+	return 0;
+}
+
 static void rtl8188_fw_callback(const struct firmware *fw, void *context)
 {
 	struct rtl8188_priv *priv = context;
+
 	if (!fw) {
 		dev_info(&priv->udev->dev, "Load firmware by callback\n");
 		rtl8188_parse_firmware(priv);
+	} else {
+		dev_info(&priv->udev->dev, "Load firmware by /lib/firmware\n");
+		dev_info(&priv->udev->dev, "fw size = %lu\n", fw->size);
+		priv->fw.fw = fw;
+
+		PRT_8710B_FIRMWARE_HDR pFwHdr = priv->fw.pFwHdr;
+		if (fw->size > FW_8710B_SIZE) {
+			dev_err(&priv->udev->dev,
+				"Firmware size:%u exceed %lu\n", fw->size,
+				FW_8710B_SIZE);
+			return -EINVAL;
+		}
+
+		/* header size is 32 bytes */
+		/* To Check Fw header. Added by tynli. 2009.12.04. */
+		pFwHdr = (PRT_8710B_FIRMWARE_HDR) fw->data;
+
+		priv->fw.pFwHdr = pFwHdr;
+		priv->fw.firmware_version = le16_to_cpu(pFwHdr->Version);
+		priv->fw.firmware_sub_version = le16_to_cpu(pFwHdr->Subversion);
+		priv->fw.FirmwareSignature = le16_to_cpu(pFwHdr->Signature);
+		dev_info(&priv->udev->dev,
+			 "firmware API: fw_ver=%x fw_subver=%04x sig=0x%x, Month=%02x, Date=%02x, Hour=%02x, Minute=%02x, FirmwareLen=%lu\n",
+			 priv->fw.firmware_version,
+			 priv->fw.firmware_sub_version,
+			 priv->fw.FirmwareSignature,
+			 pFwHdr->Month, pFwHdr->Date, pFwHdr->Hour,
+			 pFwHdr->Minute, fw->size);
+		priv->fw.fw->data += 32;
+		priv->fw.fw->size -= 32;
+
+		rtl8188_fw_set_if(priv);
 	}
 }
 
@@ -687,6 +725,7 @@ static int rtl8188_probe(struct usb_interface *intf,
 	struct usb_device *udev = interface_to_usbdev(intf);
 	struct rtl8188_priv *priv;
 	struct ieee80211_hw *hw;
+	const struct firmware *fw_entry;
 	int ret;
 
 	dev_info(&udev->dev, "probe rtl8188_wifi usb driver " DRV_VERSION "\n");
@@ -723,14 +762,15 @@ static int rtl8188_probe(struct usb_interface *intf,
 	SET_IEEE80211_DEV(priv->hw, &intf->dev);
 
 #if 1
-	request_firmware_nowait(THIS_MODULE, 1, R8188_FW_NAME,
+	request_firmware_nowait(THIS_MODULE, 1, RTL8188_FW_NAME,
 				&priv->udev->dev, GFP_KERNEL, priv,
 				rtl8188_fw_callback);
 #else
-	if (request_firmware(&fw_entry, $FIRMWARE, device) == 0) {	/*从用户空间请求映像数据 */
+	if (request_firmware(&fw_entry, RTL8188_FW_NAME, &udev->dev) == 0) {	/*从用户空间请求映像数据 */
 		/*将固件映像拷贝到硬件的存储器，拷贝函数由用户编写 */
-		copy_fw_to_device(fw_entry->data, fw_entry->size);
-		release(fw_entry);
+//              copy_fw_to_device(fw_entry->data, fw_entry->size);
+		memcpy(priv->fw, fw_entry->data, fw_entry->size);
+		release_firmware(fw_entry);
 	}
 #endif
 	ret = ieee80211_register_hw(priv->hw);
@@ -740,7 +780,7 @@ static int rtl8188_probe(struct usb_interface *intf,
 	return ret;
 
 //err_freefw:
-//	ieee80211_unregister_hw(priv->hw);
+//      ieee80211_unregister_hw(priv->hw);
 
 err_priv:
 	usb_put_intf(priv->intf);

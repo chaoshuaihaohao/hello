@@ -1,7 +1,7 @@
 #ifndef _RTL8188_FW_H_
 #define _RTL8188_FW_H_
 
-#define R8188_FW_NAME       "9170-1.fw"
+#define RTL8188_FW_NAME       "rtl8188.fw"
 #define CONFIG_EMBEDDED_FWIMG
 #define FW_8710B_SIZE           0x8000
 #define FW_8710B_START_ADDRESS  0x1000

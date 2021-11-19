@@ -187,7 +187,7 @@ struct rtl8188_priv {
 	struct {
 		HAL_VERSION version_id;
 		/****** FW related ******/
-		struct firmware fw;
+		struct firmware *fw;
 
 		PRT_8710B_FIRMWARE_HDR pFwHdr;
 		void *pFirmwareBuf;
@@ -202,6 +202,7 @@ struct rtl8188_priv {
 		u8 fw_ractrl;
 		u8 LastHMEBoxNum;	/* H2C - for host message to fw */
 	} fw;
+	struct mutex mutex;
 };
 
 #endif
