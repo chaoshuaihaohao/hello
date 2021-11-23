@@ -300,6 +300,7 @@ static void carl9170_usb_firmware_finish(struct ar9170 *ar)
 	struct usb_interface *intf = ar->intf;
 	int err;
 
+	//解析firmware并给hw结构赋值
 	err = carl9170_parse_firmware(ar);
 	if (err)
 		goto err_freefw;
@@ -547,6 +548,11 @@ static int carl9170_usb_probe(struct usb_interface *intf,
 
 static void carl9170_usb_disconnect(struct usb_interface *intf)
 {
+	struct ar9170 *ar = usb_get_intfdata(intf);
+
+	usb_set_intfdata(intf, NULL);
+	carl9170_release_firmware(ar);
+	ieee80211_free_hw(ar->hw);
 
 }
 
