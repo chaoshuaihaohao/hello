@@ -11,7 +11,182 @@
 #include <net/cfg80211.h>
 #include <linux/input.h>
 
-#include "head.h"
+#include "carl9170.h"
+static int carl9170_usb_submit_cmd_urb(struct ar9170 *ar)
+{
+	struct urb *urb;
+	int err;
+
+	if (atomic_inc_return(&ar->tx_cmd_urbs) != 1) {
+		atomic_dec(&ar->tx_cmd_urbs);
+		return 0;
+	}
+
+	urb = usb_get_from_anchor(&ar->tx_cmd);
+	if (!urb) {
+		atomic_dec(&ar->tx_cmd_urbs);
+		return 0;
+	}
+
+	usb_anchor_urb(urb, &ar->tx_anch);
+	err = usb_submit_urb(urb, GFP_ATOMIC);
+	if (unlikely(err)) {
+		usb_unanchor_urb(urb);
+		atomic_dec(&ar->tx_cmd_urbs);
+	}
+	usb_free_urb(urb);
+
+	return err;
+}
+
+
+static void carl9170_usb_cmd_complete(struct urb *urb)
+{
+	struct ar9170 *ar = urb->context;
+	int err = 0;
+
+	if (WARN_ON_ONCE(!ar))
+		return;
+
+	atomic_dec(&ar->tx_cmd_urbs);
+
+	switch (urb->status) {
+	/* everything is fine */
+	case 0:
+		break;
+
+	/* disconnect */
+	case -ENOENT:
+	case -ECONNRESET:
+	case -ENODEV:
+	case -ESHUTDOWN:
+		return;
+
+	default:
+		err = urb->status;
+		break;
+	}
+
+	if (!IS_INITIALIZED(ar))
+		return;
+
+	if (err)
+		dev_err(&ar->udev->dev, "submit cmd cb failed (%d).\n", err);
+
+	err = carl9170_usb_submit_cmd_urb(ar);
+	if (err)
+		dev_err(&ar->udev->dev, "submit cmd failed (%d).\n", err);
+}
+
+int __carl9170_exec_cmd(struct ar9170 *ar, struct carl9170_cmd *cmd,
+			const bool free_buf)
+{
+	struct urb *urb;
+	int err = 0;
+
+	if (!IS_INITIALIZED(ar)) {
+		err = -EPERM;
+		goto err_free;
+	}
+
+	if (WARN_ON(cmd->hdr.len > CARL9170_MAX_CMD_LEN - 4)) {
+		err = -EINVAL;
+		goto err_free;
+	}
+
+	urb = usb_alloc_urb(0, GFP_ATOMIC);
+	if (!urb) {
+		err = -ENOMEM;
+		goto err_free;
+	}
+
+	if (ar->usb_ep_cmd_is_bulk)
+		usb_fill_bulk_urb(urb, ar->udev,
+				  usb_sndbulkpipe(ar->udev, AR9170_USB_EP_CMD),
+				  cmd, cmd->hdr.len + 4,
+				  carl9170_usb_cmd_complete, ar);
+	else
+		usb_fill_int_urb(urb, ar->udev,
+				 usb_sndintpipe(ar->udev, AR9170_USB_EP_CMD),
+				 cmd, cmd->hdr.len + 4,
+				 carl9170_usb_cmd_complete, ar, 1);
+
+	if (free_buf)
+		urb->transfer_flags |= URB_FREE_BUFFER;
+
+	usb_anchor_urb(urb, &ar->tx_cmd);
+	usb_free_urb(urb);
+
+	return carl9170_usb_submit_cmd_urb(ar);
+
+err_free:
+	if (free_buf)
+		kfree(cmd);
+
+	return err;
+}
+int carl9170_exec_cmd(struct ar9170 *ar, const enum carl9170_cmd_oids cmd,
+	unsigned int plen, void *payload, unsigned int outlen, void *out)
+{
+	int err = -ENOMEM;
+	unsigned long time_left;
+
+	if (!IS_ACCEPTING_CMD(ar))
+		return -EIO;
+
+	if (!(cmd & CARL9170_CMD_ASYNC_FLAG))
+		might_sleep();
+
+	ar->cmd.hdr.len = plen;
+	ar->cmd.hdr.cmd = cmd;
+	/* writing multiple regs fills this buffer already */
+	if (plen && payload != (u8 *)(ar->cmd.data))
+		memcpy(ar->cmd.data, payload, plen);
+
+	spin_lock_bh(&ar->cmd_lock);
+	ar->readbuf = (u8 *)out;
+	ar->readlen = outlen;
+	spin_unlock_bh(&ar->cmd_lock);
+
+	reinit_completion(&ar->cmd_wait);
+	err = __carl9170_exec_cmd(ar, &ar->cmd, false);
+
+	if (!(cmd & CARL9170_CMD_ASYNC_FLAG)) {
+		time_left = wait_for_completion_timeout(&ar->cmd_wait, HZ);
+		if (time_left == 0) {
+			err = -ETIMEDOUT;
+			goto err_unbuf;
+		}
+
+		if (ar->readlen != outlen) {
+			err = -EMSGSIZE;
+			goto err_unbuf;
+		}
+	}
+
+	return 0;
+
+err_unbuf:
+	/* Maybe the device was removed in the moment we were waiting? */
+	if (IS_STARTED(ar)) {
+		dev_err(&ar->udev->dev, "no command feedback "
+			"received (%d).\n", err);
+
+		/* provide some maybe useful debug information */
+		print_hex_dump_bytes("carl9170 cmd: ", DUMP_PREFIX_NONE,
+				     &ar->cmd, plen + 4);
+
+//		carl9170_restart(ar, CARL9170_RR_COMMAND_TIMEOUT);
+	}
+
+	/* invalidate to avoid completing the next command prematurely */
+	spin_lock_bh(&ar->cmd_lock);
+	ar->readbuf = NULL;
+	ar->readlen = 0;
+	spin_unlock_bh(&ar->cmd_lock);
+
+	return err;
+}
 
 static void carl9170_fw_set_if_combinations(struct ar9170 *ar,
 					    u16 if_comb_types)
@@ -29,19 +204,6 @@ static void carl9170_fw_set_if_combinations(struct ar9170 *ar,
 
 	ar->hw->wiphy->iface_combinations = ar->if_combs;
 	ar->hw->wiphy->n_iface_combinations = ARRAY_SIZE(ar->if_combs);
-}
-
-static inline bool carl9170fw_desc_cmp(const struct carl9170fw_desc_head *head,
-				       const u8 descid[CARL9170FW_MAGIC_SIZE],
-				       u16 min_len, u8 compatible_revision)
-{
-	if (descid[0] == head->magic[0] && descid[1] == head->magic[1] &&
-	    descid[2] == head->magic[2] && descid[3] == head->magic[3] &&
-	    !CHECK_HDR_VERSION(head, compatible_revision) &&
-	    (le16_to_cpu(head->length) >= min_len))
-		return true;
-
-	return false;
 }
 
 static const u8 otus_magic[4] = { OTUS_MAGIC };
@@ -896,18 +1058,17 @@ static void carl9170_usb_firmware_finish(struct ar9170 *ar)
 	if (err)
 		goto err_freefw;
 
-#if 0
 	err = carl9170_register(ar);
 
 	carl9170_usb_stop(ar);
 	if (err)
 		goto err_unrx;
-#endif
+
 	complete(&ar->fw_load_wait);
 	usb_put_intf(intf);
 	return;
 
-#if 0
+#if 1
 err_unrx:
 	carl9170_usb_cancel_urbs(ar);
 #endif
