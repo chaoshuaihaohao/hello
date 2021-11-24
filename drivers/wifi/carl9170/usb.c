@@ -9,6 +9,7 @@
 #include <linux/firmware.h>
 #include <net/mac80211.h>
 #include <net/cfg80211.h>
+#include <linux/input.h>
 
 #include "head.h"
 
@@ -295,6 +296,592 @@ static void carl9170_release_firmware(struct ar9170 *ar)
 	}
 }
 
+static void carl9170_cmd_callback(struct ar9170 *ar, u32 len, void *buffer)
+{
+#if 0
+	/*
+	 * Some commands may have a variable response length
+	 * and we cannot predict the correct length in advance.
+	 * So we only check if we provided enough space for the data.
+	 */
+	if (unlikely(ar->readlen != (len - 4))) {
+		dev_warn(&ar->udev->dev, "received invalid command response:"
+			 "got %d, instead of %d\n", len - 4, ar->readlen);
+		print_hex_dump_bytes("carl9170 cmd:", DUMP_PREFIX_OFFSET,
+				     ar->cmd_buf, (ar->cmd.hdr.len + 4) & 0x3f);
+		print_hex_dump_bytes("carl9170 rsp:", DUMP_PREFIX_OFFSET,
+				     buffer, len);
+		/*
+		 * Do not complete. The command times out,
+		 * and we get a stack trace from there.
+		 */
+		//                carl9170_restart(ar, CARL9170_RR_INVALID_RSP);
+	}
+	spin_lock(&ar->cmd_lock);
+	if (ar->readbuf) {
+		if (len >= 4)
+			memcpy(ar->readbuf, buffer + 4, len - 4);
+
+		ar->readbuf = NULL;
+	}
+	complete(&ar->cmd_wait);
+	spin_unlock(&ar->cmd_lock);
+#endif
+}
+
+void carl9170_handle_command_response(struct ar9170 *ar, void *buf, u32 len)
+{
+	struct carl9170_rsp *cmd = buf;
+	struct ieee80211_vif *vif;
+
+	printk("%s: cmd = %d\n", __func__, cmd->hdr.cmd);
+#if 0
+	if ((cmd->hdr.cmd & CARL9170_RSP_FLAG) != CARL9170_RSP_FLAG) {
+		if (!(cmd->hdr.cmd & CARL9170_CMD_ASYNC_FLAG))
+			carl9170_cmd_callback(ar, len, buf);
+
+		return;
+	}
+	if (unlikely(cmd->hdr.len != (len - 4))) {
+		if (net_ratelimit()) {
+			wiphy_err(ar->hw->wiphy, "FW: received over-/under"
+				  "sized event %x (%d, but should be %d).\n",
+				  cmd->hdr.cmd, cmd->hdr.len, len - 4);
+
+			print_hex_dump_bytes("dump:", DUMP_PREFIX_NONE,
+					     buf, len);
+		}
+
+		return;
+	}
+#endif
+
+	/* hardware event handlers */
+	switch (cmd->hdr.cmd) {
+#if 0
+	case CARL9170_RSP_PRETBTT:
+		/* pre-TBTT event */
+		rcu_read_lock();
+		vif = carl9170_get_main_vif(ar);
+
+		if (!vif) {
+			rcu_read_unlock();
+			break;
+		}
+
+		switch (vif->type) {
+		case NL80211_IFTYPE_STATION:
+			carl9170_handle_ps(ar, cmd);
+			break;
+
+		case NL80211_IFTYPE_AP:
+		case NL80211_IFTYPE_ADHOC:
+		case NL80211_IFTYPE_MESH_POINT:
+			carl9170_update_beacon(ar, true);
+			break;
+
+		default:
+			break;
+		}
+		rcu_read_unlock();
+
+		break;
+
+	case CARL9170_RSP_TXCOMP:
+		/* TX status notification */
+		carl9170_tx_process_status(ar, cmd);
+		break;
+
+	case CARL9170_RSP_BEACON_CONFIG:
+		/*
+		 * (IBSS) beacon send notification
+		 * bytes: 04 c2 XX YY B4 B3 B2 B1
+		 *
+		 * XX always 80
+		 * YY always 00
+		 * B1-B4 "should" be the number of send out beacons.
+		 */
+		break;
+
+	case CARL9170_RSP_ATIM:
+		/* End of Atim Window */
+		break;
+
+	case CARL9170_RSP_WATCHDOG:
+		/* Watchdog Interrupt */
+		carl9170_restart(ar, CARL9170_RR_WATCHDOG);
+		break;
+
+	case CARL9170_RSP_TEXT:
+		/* firmware debug */
+		carl9170_dbg_message(ar, (char *)buf + 4, len - 4);
+		break;
+
+	case CARL9170_RSP_HEXDUMP:
+		wiphy_dbg(ar->hw->wiphy, "FW: HD %d\n", len - 4);
+		print_hex_dump_bytes("FW:", DUMP_PREFIX_NONE,
+				     (char *)buf + 4, len - 4);
+		break;
+
+	case CARL9170_RSP_RADAR:
+		if (!net_ratelimit())
+			break;
+
+		wiphy_info(ar->hw->wiphy, "FW: RADAR! Please report this "
+			   "incident to linux-wireless@vger.kernel.org !\n");
+		break;
+
+	case CARL9170_RSP_GPIO:
+#ifdef CONFIG_CARL9170_WPC
+		if (ar->wps.pbc) {
+			bool state =
+			    !!(cmd->gpio.gpio &
+			       cpu_to_le32
+			       (AR9170_GPIO_PORT_WPS_BUTTON_PRESSED));
+
+			if (state != ar->wps.pbc_state) {
+				ar->wps.pbc_state = state;
+				input_report_key(ar->wps.pbc, KEY_WPS_BUTTON,
+						 state);
+				input_sync(ar->wps.pbc);
+			}
+		}
+#endif /* CONFIG_CARL9170_WPC */
+		break;
+#endif
+	case CARL9170_RSP_BOOT:
+		complete(&ar->fw_boot_wait);
+		break;
+	default:
+		wiphy_err(ar->hw->wiphy, "FW: received unhandled event %x\n",
+			  cmd->hdr.cmd);
+		print_hex_dump_bytes("dump:", DUMP_PREFIX_NONE, buf, len);
+		break;
+	}
+}
+
+static void carl9170_usb_rx_irq_complete(struct urb *urb)
+{
+	struct ar9170 *ar = urb->context;
+	printk("%s\n", __func__);
+
+	if (WARN_ON_ONCE(!ar))
+		return;
+
+	switch (urb->status) {
+		/* everything is fine */
+	case 0:
+		break;
+
+		/* disconnect */
+	case -ENOENT:
+	case -ECONNRESET:
+	case -ENODEV:
+	case -ESHUTDOWN:
+		return;
+
+	default:
+		goto resubmit;
+	}
+
+	/*
+	 * While the carl9170 firmware does not use this EP, the
+	 * firmware loader in the EEPROM unfortunately does.
+	 * Therefore we need to be ready to handle out-of-band
+	 * responses and traps in case the firmware crashed and
+	 * the loader took over again.
+	 */
+	carl9170_handle_command_response(ar, urb->transfer_buffer,
+					 urb->actual_length);
+
+resubmit:
+	usb_anchor_urb(urb, &ar->rx_anch);
+	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC)))
+		usb_unanchor_urb(urb);
+}
+
+static int carl9170_usb_send_rx_irq_urb(struct ar9170 *ar)
+{
+	struct urb *urb = NULL;
+	void *ibuf;
+	int err = -ENOMEM;
+
+	urb = usb_alloc_urb(0, GFP_KERNEL);
+	if (!urb)
+		goto out;
+
+	ibuf = kmalloc(AR9170_USB_EP_CTRL_MAX, GFP_KERNEL);
+	if (!ibuf)
+		goto out;
+
+	usb_fill_int_urb(urb, ar->udev, usb_rcvintpipe(ar->udev,
+						       AR9170_USB_EP_IRQ), ibuf,
+			 AR9170_USB_EP_CTRL_MAX, carl9170_usb_rx_irq_complete,
+			 ar, 1);
+
+	urb->transfer_flags |= URB_FREE_BUFFER;
+
+	usb_anchor_urb(urb, &ar->rx_anch);
+	err = usb_submit_urb(urb, GFP_KERNEL);
+	if (err)
+		usb_unanchor_urb(urb);
+
+out:
+	usb_free_urb(urb);
+	return err;
+}
+
+static int carl9170_usb_submit_rx_urb(struct ar9170 *ar, gfp_t gfp)
+{
+	struct urb *urb;
+	int err = 0, runs = 0;
+
+	while ((atomic_read(&ar->rx_anch_urbs) < AR9170_NUM_RX_URBS) &&
+	       (runs++ < AR9170_NUM_RX_URBS)) {
+		err = -ENOSPC;
+		urb = usb_get_from_anchor(&ar->rx_pool);
+		if (urb) {
+			usb_anchor_urb(urb, &ar->rx_anch);
+			err = usb_submit_urb(urb, gfp);
+			if (unlikely(err)) {
+				usb_unanchor_urb(urb);
+				usb_anchor_urb(urb, &ar->rx_pool);
+			} else {
+				atomic_dec(&ar->rx_pool_urbs);
+				atomic_inc(&ar->rx_anch_urbs);
+			}
+			usb_free_urb(urb);
+		}
+	}
+
+	return err;
+}
+
+static void carl9170_usb_rx_complete(struct urb *urb)
+{
+	printk("%s\n", __func__);
+	struct ar9170 *ar = (struct ar9170 *)urb->context;
+	int err;
+
+	if (WARN_ON_ONCE(!ar))
+		return;
+
+	atomic_dec(&ar->rx_anch_urbs);
+
+	switch (urb->status) {
+	case 0:
+		/* rx path */
+		usb_anchor_urb(urb, &ar->rx_work);
+		atomic_inc(&ar->rx_work_urbs);
+		break;
+
+	case -ENOENT:
+	case -ECONNRESET:
+	case -ENODEV:
+	case -ESHUTDOWN:
+		/* handle disconnect events */
+		return;
+
+	default:
+		/* handle all other errors */
+		usb_anchor_urb(urb, &ar->rx_pool);
+		atomic_inc(&ar->rx_pool_urbs);
+		break;
+	}
+
+	err = carl9170_usb_submit_rx_urb(ar, GFP_ATOMIC);
+	if (unlikely(err)) {
+#if 0
+		/*
+		 * usb_submit_rx_urb reported a problem.
+		 * In case this is due to a rx buffer shortage,
+		 * elevate the tasklet worker priority to
+		 * the highest available level.
+		 */
+		tasklet_hi_schedule(&ar->usb_tasklet);
+
+		if (atomic_read(&ar->rx_anch_urbs) == 0) {
+			/*
+			 * The system is too slow to cope with
+			 * the enormous workload. We have simply
+			 * run out of active rx urbs and this
+			 * unfortunately leads to an unpredictable
+			 * device.
+			 */
+
+			ieee80211_queue_work(ar->hw, &ar->ping_work);
+		}
+#endif
+	} else {
+		/*
+		 * Using anything less than _high_ priority absolutely
+		 * kills the rx performance my UP-System...
+		 */
+		//      tasklet_hi_schedule(&ar->usb_tasklet);
+	}
+}
+
+static struct urb *carl9170_usb_alloc_rx_urb(struct ar9170 *ar, gfp_t gfp)
+{
+	struct urb *urb;
+	void *buf;
+
+	buf = kmalloc(ar->fw.rx_size, gfp);
+	if (!buf)
+		return NULL;
+
+	urb = usb_alloc_urb(0, gfp);
+	if (!urb) {
+		kfree(buf);
+		return NULL;
+	}
+
+	usb_fill_bulk_urb(urb, ar->udev, usb_rcvbulkpipe(ar->udev,
+							 AR9170_USB_EP_RX), buf,
+			  ar->fw.rx_size, carl9170_usb_rx_complete, ar);
+
+	urb->transfer_flags |= URB_FREE_BUFFER;
+
+	return urb;
+}
+
+static int carl9170_usb_init_rx_bulk_urbs(struct ar9170 *ar)
+{
+	struct urb *urb;
+	int i, err = -EINVAL;
+
+	/*
+	 * The driver actively maintains a second shadow
+	 * pool for inactive, but fully-prepared rx urbs.
+	 *
+	 * The pool should help the driver to master huge
+	 * workload spikes without running the risk of
+	 * undersupplying the hardware or wasting time by
+	 * processing rx data (streams) inside the urb
+	 * completion (hardirq context).
+	 */
+	for (i = 0; i < AR9170_NUM_RX_URBS_POOL; i++) {
+		urb = carl9170_usb_alloc_rx_urb(ar, GFP_KERNEL);
+		if (!urb) {
+			err = -ENOMEM;
+			goto err_out;
+		}
+
+		usb_anchor_urb(urb, &ar->rx_pool);
+		atomic_inc(&ar->rx_pool_urbs);
+		usb_free_urb(urb);
+	}
+
+	err = carl9170_usb_submit_rx_urb(ar, GFP_KERNEL);
+	if (err)
+		goto err_out;
+
+	/* the device now waiting for the firmware. */
+	//carl9170_set_state_when(ar, CARL9170_STOPPED, CARL9170_IDLE);
+	return 0;
+
+err_out:
+
+	usb_scuttle_anchored_urbs(&ar->rx_pool);
+	usb_scuttle_anchored_urbs(&ar->rx_work);
+	usb_kill_anchored_urbs(&ar->rx_anch);
+	return err;
+}
+
+static void carl9170_usb_cancel_urbs(struct ar9170 *ar)
+{
+	int err;
+
+#if 0
+	//         carl9170_set_state(ar, CARL9170_UNKNOWN_STATE);
+
+//          err = carl9170_usb_flush(ar);
+	//        if (err)
+	//              dev_err(&ar->udev->dev, "stuck tx urbs!\n");
+
+	usb_poison_anchored_urbs(&ar->tx_anch);
+//          carl9170_usb_handle_tx_err(ar);
+#endif
+	usb_poison_anchored_urbs(&ar->rx_anch);
+
+#if 1
+//      tasklet_kill(&ar->usb_tasklet);
+
+	usb_scuttle_anchored_urbs(&ar->rx_work);
+	usb_scuttle_anchored_urbs(&ar->rx_pool);
+	usb_scuttle_anchored_urbs(&ar->tx_cmd);
+#endif
+}
+
+int carl9170_usb_open(struct ar9170 *ar)
+{
+//          usb_unpoison_anchored_urbs(&ar->tx_anch);
+
+//          carl9170_set_state_when(ar, CARL9170_STOPPED, CARL9170_IDLE);
+	return 0;
+}
+
+void carl9170_usb_stop(struct ar9170 *ar)
+{
+	int ret;
+
+#if 0
+	carl9170_set_state_when(ar, CARL9170_IDLE, CARL9170_STOPPED);
+
+	ret = carl9170_usb_flush(ar);
+	if (ret)
+		dev_err(&ar->udev->dev, "kill pending tx urbs.\n");
+	usb_poison_anchored_urbs(&ar->tx_anch);
+	carl9170_usb_handle_tx_err(ar);
+
+	/* kill any pending command */
+	spin_lock_bh(&ar->cmd_lock);
+	ar->readlen = 0;
+	spin_unlock_bh(&ar->cmd_lock);
+	complete(&ar->cmd_wait);
+
+	/*
+	 * Note:
+	 * So far we freed all tx urbs, but we won't dare to touch any rx urbs.
+	 * Else we would end up with a unresponsive device...
+	 */
+#endif
+}
+
+static int carl9170_usb_load_firmware(struct ar9170 *ar)
+{
+	const u8 *data;
+	u8 *buf;
+	unsigned int transfer;
+	size_t len;
+	u32 addr;
+	int err = 0;
+
+	buf = kmalloc(4096, GFP_KERNEL);
+	if (!buf) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+
+	data = ar->fw.fw->data;
+	len = ar->fw.fw->size;
+	addr = ar->fw.address;
+
+	/* this removes the miniboot image */
+	data += ar->fw.offset;
+	len -= ar->fw.offset;
+
+	while (len) {
+		transfer = min_t(unsigned int, len, 4096u);
+		memcpy(buf, data, transfer);
+
+		err = usb_control_msg(ar->udev, usb_sndctrlpipe(ar->udev, 0),
+				      0x30 /* FW DL */ , 0x40 | USB_DIR_OUT,
+				      addr >> 8, 0, buf, transfer, 100);
+		if (err < 0) {
+			kfree(buf);
+			dev_err(&ar->udev->dev, "fw dl failed!\n");
+			goto err_out;
+		}
+
+		len -= transfer;
+		data += transfer;
+		addr += transfer;
+	}
+	kfree(buf);
+
+	err = usb_control_msg(ar->udev, usb_sndctrlpipe(ar->udev, 0),
+			      0x31 /* FW DL COMPLETE */ ,
+			      0x40 | USB_DIR_OUT, 0, 0, NULL, 0, 200);
+	if (err < 0)
+		dev_err(&ar->udev->dev, "fw dl complete failed!\n");
+
+	if (wait_for_completion_timeout(&ar->fw_boot_wait, HZ) == 0) {
+		err = -ETIMEDOUT;
+		goto err_out;
+	}
+
+#if 0
+	err = carl9170_echo_test(ar, 0x4a110123);
+	if (err)
+		goto err_out;
+
+	/* now, start the command response counter */
+	ar->cmd_seq = -1;
+#endif
+	return 0;
+
+err_out:
+	dev_err(&ar->udev->dev, "firmware upload failed (%d).\n", err);
+	return err;
+}
+
+static int carl9170_usb_init_device(struct ar9170 *ar)
+{
+	int err;
+
+	/*
+	 * The carl9170 firmware let's the driver know when it's
+	 * ready for action. But we have to be prepared to gracefully
+	 * handle all spurious [flushed] messages after each (re-)boot.
+	 * Thus the command response counter remains disabled until it
+	 * can be safely synchronized.
+	 */
+	//        ar->cmd_seq = -2;
+
+	err = carl9170_usb_send_rx_irq_urb(ar);
+	if (err)
+		goto err_out;
+
+	err = carl9170_usb_init_rx_bulk_urbs(ar);
+	if (err)
+		goto err_unrx;
+
+	err = carl9170_usb_open(ar);
+	if (err)
+		goto err_unrx;
+
+	mutex_lock(&ar->mutex);
+	err = carl9170_usb_load_firmware(ar);
+	mutex_unlock(&ar->mutex);
+	if (err)
+		goto err_stop;
+
+	return 0;
+
+err_stop:
+	carl9170_usb_stop(ar);
+
+err_unrx:
+	carl9170_usb_cancel_urbs(ar);
+
+err_out:
+	return err;
+}
+
+static struct usb_driver carl9170_driver;
+static void carl9170_usb_firmware_failed(struct ar9170 *ar)
+{
+	/* Store a copies of the usb_interface and usb_device pointer locally.
+	 * This is because release_driver initiates carl9170_usb_disconnect,
+	 * which in turn frees our driver context (ar).
+	 */
+	struct usb_interface *intf = ar->intf;
+	struct usb_device *udev = ar->udev;
+
+	complete(&ar->fw_load_wait);
+	/* at this point 'ar' could be already freed. Don't use it anymore */
+	ar = NULL;
+
+#if 1
+	/* unbind anything failed */
+	usb_lock_device(udev);
+	usb_driver_release_interface(&carl9170_driver, intf);
+	usb_unlock_device(udev);
+#endif
+	usb_put_intf(intf);
+}
+
 static void carl9170_usb_firmware_finish(struct ar9170 *ar)
 {
 	struct usb_interface *intf = ar->intf;
@@ -305,8 +892,29 @@ static void carl9170_usb_firmware_finish(struct ar9170 *ar)
 	if (err)
 		goto err_freefw;
 
+	err = carl9170_usb_init_device(ar);
+	if (err)
+		goto err_freefw;
+
+#if 0
+	err = carl9170_register(ar);
+
+	carl9170_usb_stop(ar);
+	if (err)
+		goto err_unrx;
+#endif
+	complete(&ar->fw_load_wait);
+	usb_put_intf(intf);
+	return;
+
+#if 0
+err_unrx:
+	carl9170_usb_cancel_urbs(ar);
+#endif
+
 err_freefw:
 	carl9170_release_firmware(ar);
+	carl9170_usb_firmware_failed(ar);
 }
 
 static void carl9170_usb_firmware_step2(const struct firmware *fw,
@@ -319,6 +927,7 @@ static void carl9170_usb_firmware_step2(const struct firmware *fw,
 		return;
 	}
 	dev_err(&ar->udev->dev, "firmware not found.\n");
+	carl9170_usb_firmware_failed(ar);
 }
 
 static int carl9170_op_start(struct ieee80211_hw *hw)
@@ -517,7 +1126,6 @@ static int carl9170_usb_probe(struct usb_interface *intf,
 	usb_set_intfdata(intf, ar);
 	SET_IEEE80211_DEV(ar->hw, &intf->dev);
 
-#if 0
 	init_usb_anchor(&ar->rx_anch);
 	init_usb_anchor(&ar->rx_pool);
 	init_usb_anchor(&ar->rx_work);
@@ -525,18 +1133,17 @@ static int carl9170_usb_probe(struct usb_interface *intf,
 	init_usb_anchor(&ar->tx_anch);
 	init_usb_anchor(&ar->tx_cmd);
 	init_usb_anchor(&ar->tx_err);
-	init_completion(&ar->cmd_wait);
+//      init_completion(&ar->cmd_wait);
 	init_completion(&ar->fw_boot_wait);
 	init_completion(&ar->fw_load_wait);
-	tasklet_init(&ar->usb_tasklet, carl9170_usb_tasklet, (unsigned long)ar);
+//      tasklet_init(&ar->usb_tasklet, carl9170_usb_tasklet, (unsigned long)ar);
 
 	atomic_set(&ar->tx_cmd_urbs, 0);
 	atomic_set(&ar->tx_anch_urbs, 0);
 	atomic_set(&ar->rx_work_urbs, 0);
-	atomic_set(&ar->rx_anch_urbs, 0);
 	atomic_set(&ar->rx_pool_urbs, 0);
-	ar->cmd_seq = -2;
-#endif
+	atomic_set(&ar->rx_anch_urbs, 0);
+//      ar->cmd_seq = -2;
 	usb_get_dev(ar->udev);
 
 //       carl9170_set_state(ar, CARL9170_STOPPED);
@@ -550,10 +1157,11 @@ static void carl9170_usb_disconnect(struct usb_interface *intf)
 {
 	struct ar9170 *ar = usb_get_intfdata(intf);
 
+	wait_for_completion(&ar->fw_load_wait);
+
 	usb_set_intfdata(intf, NULL);
 	carl9170_release_firmware(ar);
 	ieee80211_free_hw(ar->hw);
-
 }
 
 #ifdef CONFIG_PM
