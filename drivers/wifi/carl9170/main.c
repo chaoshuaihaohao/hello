@@ -135,12 +135,12 @@ static struct ieee80211_supported_band carl9170_band_5GHz = {
 #if 1
 void carl9170_unregister(struct ar9170 *ar)
 {
-#if 0
 	if (!ar->registered)
 		return;
 
 	ar->registered = false;
 
+#if 0
 #ifdef CONFIG_CARL9170_LEDS
 	carl9170_led_unregister(ar);
 #endif /* CONFIG_CARL9170_LEDS */
@@ -162,9 +162,9 @@ void carl9170_unregister(struct ar9170 *ar)
 
 	carl9170_cancel_worker(ar);
 	cancel_work_sync(&ar->restart_work);
+#endif
 
 	ieee80211_unregister_hw(ar->hw);
-#endif
 }
 
 
@@ -192,8 +192,10 @@ static int carl9170_read_eeprom(struct ar9170 *ar)
 		err = carl9170_exec_cmd(ar, CARL9170_CMD_RREG,
 					RB, (u8 *) &offsets,
 					RB, eeprom + RB * i);
-		if (err)
+		if (err) {
+			dev_err(&ar->udev->dev, "carl9170 exec cmd failed: %d!\n", err);
 			return err;
+		}
 	}
 
 #undef RW
@@ -276,12 +278,16 @@ int carl9170_register(struct ar9170 *ar)
 
 	/* try to read EEPROM, init MAC addr */
 	err = carl9170_read_eeprom(ar);
-	if (err)
+	if (err) {
+		dev_err(&ar->udev->dev, "carl9170 read eeprom failed!\n");
 		return err;
+	}
 
 	err = carl9170_parse_eeprom(ar);
-	if (err)
+	if (err) {
+		dev_err(&ar->udev->dev, "carl9170 parse eeprom failed!\n");
 		return err;
+	}
 
 #if 0
 	err = ath_regd_init(regulatory, ar->hw->wiphy,
@@ -298,14 +304,18 @@ int carl9170_register(struct ar9170 *ar)
 		ar->vif_priv[i].id = i;
 		ar->vif_priv[i].vif = NULL;
 	}
+#endif
 
+#if 1
 	err = ieee80211_register_hw(ar->hw);
 	if (err)
 		return err;
 
 	/* mac80211 interface is now registered */
 	ar->registered = true;
+#endif
 
+#if 0
 	if (!ath_is_world_regd(regulatory))
 		regulatory_hint(ar->hw->wiphy, regulatory->alpha2);
 

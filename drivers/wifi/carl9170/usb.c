@@ -1051,14 +1051,20 @@ static void carl9170_usb_firmware_finish(struct ar9170 *ar)
 
 	//解析firmware并给hw结构赋值
 	err = carl9170_parse_firmware(ar);
-	if (err)
+	if (err) {
+		dev_err(&ar->udev->dev, "carl9170 parse firmware failed!\n");
 		goto err_freefw;
+	}
 
 	err = carl9170_usb_init_device(ar);
-	if (err)
-		goto err_freefw;
+	if (err) {
+		dev_err(&ar->udev->dev, "carl9170 init usb failed!\n");
+		//goto err_freefw;
+	}
 
 	err = carl9170_register(ar);
+	if (err)
+		dev_err(&ar->udev->dev, "carl9170 register failed!\n");
 
 	carl9170_usb_stop(ar);
 	if (err)
@@ -1137,11 +1143,11 @@ static const struct ieee80211_ops carl9170_ops = {
 	.start = carl9170_op_start,
 	.stop = carl9170_op_stop,
 	.tx = carl9170_op_tx,
-	//      .flush                  = carl9170_op_flush,
+//	.flush                  = carl9170_op_flush,
 	.add_interface = carl9170_op_add_interface,
 	.remove_interface = carl9170_op_remove_interface,
 	.config = carl9170_op_config,
-//       .prepare_multicast      = carl9170_op_prepare_multicast,
+//	.prepare_multicast      = carl9170_op_prepare_multicast,
 	.configure_filter = carl9170_op_configure_filter,
 #if 0
 	.conf_tx = carl9170_op_conf_tx,
