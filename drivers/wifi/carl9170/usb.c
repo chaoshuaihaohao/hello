@@ -1276,9 +1276,10 @@ err_nomem:
 static int carl9170_usb_probe(struct usb_interface *intf,
 			      const struct usb_device_id *id)
 {
+	struct usb_endpoint_descriptor *ep;
 	struct ar9170 *ar;
 	struct usb_device *udev;
-	int err;
+	int i, err;
 
 	ar = carl9170_alloc(sizeof(*ar));
 	if (IS_ERR(ar))
@@ -1290,6 +1291,20 @@ static int carl9170_usb_probe(struct usb_interface *intf,
 	ar->intf = intf;
 	ar->features = id->driver_info;
 
+	/* We need to remember the type of endpoint 4 because it differs
+	 * between high- and full-speed configuration. The high-speed
+	 * configuration specifies it as interrupt and the full-speed
+	 * configuration as bulk endpoint. This information is required
+	 * later when sending urbs to that endpoint.
+	 */
+	for (i = 0; i < intf->cur_altsetting->desc.bNumEndpoints; ++i) {
+		ep = &intf->cur_altsetting->endpoint[i].desc;
+
+		if (usb_endpoint_num(ep) == AR9170_USB_EP_CMD &&
+		    usb_endpoint_dir_out(ep) &&
+		    usb_endpoint_type(ep) == USB_ENDPOINT_XFER_BULK)
+			ar->usb_ep_cmd_is_bulk = true;
+	}
 	usb_set_intfdata(intf, ar);
 	SET_IEEE80211_DEV(ar->hw, &intf->dev);
 
@@ -1308,10 +1323,10 @@ static int carl9170_usb_probe(struct usb_interface *intf,
 	atomic_set(&ar->tx_cmd_urbs, 0);
 	atomic_set(&ar->tx_anch_urbs, 0);
 	atomic_set(&ar->rx_work_urbs, 0);
-	atomic_set(&ar->rx_pool_urbs, 0);
 	atomic_set(&ar->rx_anch_urbs, 0);
-//      ar->cmd_seq = -2;
-	usb_get_dev(ar->udev);
+	atomic_set(&ar->rx_pool_urbs, 0);
+
+	usb_get_intf(intf);
 
 //       carl9170_set_state(ar, CARL9170_STOPPED);
 
