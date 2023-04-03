@@ -1,0 +1,69 @@
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <linux/un.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <stdio.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+/************************************************************************************************************************
+ 
+*************************************************************************************************************************/
+int main(int argc, char *argv[])
+{
+    int fd, new_fd, struct_len, numbytes,i;
+    struct sockaddr_un server_addr;
+    char buff[BUFSIZ];
+	char *mysocketpath=argv[1];
+
+    //struct msghdr msg; 
+    bzero(&server_addr, sizeof(server_addr));
+    server_addr.sun_family = AF_UNIX;
+    strncpy(server_addr.sun_path, mysocketpath, sizeof(server_addr.sun_path));
+    struct_len = sizeof(struct sockaddr_un);
+   while((fd = socket(AF_UNIX,SOCK_DGRAM,0)) == -1);
+   if (bind(fd, (struct sockaddr*)(&server_addr), struct_len) < 0) 
+   { 
+      fprintf(stderr, "bind fail\n"); 
+      exit(EXIT_FAILURE); 
+   } 
+   printf("Bind Success!\n");
+    while(1)
+    {
+        struct msghdr msg;
+        bzero(&msg,sizeof(struct msghdr));
+        msg.msg_name =&server_addr; 
+        msg.msg_namelen =sizeof(struct sockaddr_un); 
+        struct iovec io;
+        io.iov_base =buff; 
+        io.iov_len =BUFSIZ;
+         msg.msg_iov = &io; 
+        msg.msg_iovlen = 1;
+        numbytes = recvmsg(fd,&msg,0);
+         char * temp = msg.msg_iov[0].iov_base;//获取得到的数据
+        temp[numbytes] = '\0';//为数据末尾添加结束符
+        printf("get %d \n", numbytes);
+        printf("-----server recvmsg-----:%s\n", temp);
+
+        bzero(&msg,sizeof(struct msghdr));
+        msg.msg_name =&server_addr; 
+        msg.msg_namelen =sizeof(struct sockaddr_un); 
+        io.iov_base =buff; 
+        io.iov_len =BUFSIZ;
+         msg.msg_iov = &io; 
+        msg.msg_iovlen = 1;
+	char *sbuf = "Server has receved";
+	strncpy(msg.msg_iov[0].iov_base, sbuf, sizeof(msg.msg_iov[0].iov_len));
+	sendmsg(fd, &msg, 0);
+        printf("-----server sendmsg-----:%s\n", (char *)msg.msg_iov[0].iov_base);
+
+    }
+   // close(new_fd);
+    close(fd);
+    return 0;
+}

@@ -9,10 +9,21 @@
 #include <sys/types.h>
 #include <sys/socket.h>		//socket,bind
 
+
+enum {
+	ZERO,
+	ONE,
+	TWO,
+	THREE,
+	FOUR,
+	MAX
+};
+
+
 int main(int argc, char *argv[])
 {
 	unsigned short port = 8000;	// 服务器的端口号
-	char *server_ip = "10.20.53.139";	// 服务器ip地址
+	char *server_ip = "192.168.11.219";	// 服务器ip地址
 
 	int sockfd;
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);	// 创建通信端点：套接字
@@ -35,8 +46,23 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
+#if 0
 	char send_buf[100] = "this is for test";
 	send(sockfd, send_buf, strlen(send_buf), 0);	// 向服务器发送信息
+#else
+	int send_buf = ZERO;
+	int recv_buf = 0;
+	while(1) {
+		send_buf %= 4;
+		printf("send data:%d\n", send_buf);
+		send(sockfd, &send_buf, sizeof(send_buf), 0);	// 向服务器发送信息
+		send_buf++;
+		//If we need ack, block recv here.
+		recv(sockfd, &recv_buf, sizeof(recv_buf), 0);
+		printf("recv data:%d\n", recv_buf);
+		sleep(1);
+	}
+#endif
 
 	close(sockfd);
 

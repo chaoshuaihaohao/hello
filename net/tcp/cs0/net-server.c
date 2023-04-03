@@ -63,11 +63,23 @@ int main(int argc, char *argv[])
 		printf("client ip=%s, port=%d\n", client_ip,
 		       ntohs(client_addr.sin_port));
 
+#if 0
 		char recv_buf[512] = { 0 };
 		while (recv(connfd, recv_buf, sizeof(recv_buf), 0) > 0) {
 			printf("recv data: %s\n", recv_buf);
 			break;
 		}
+#else
+		int recv_buf, send_buf;
+		while (recv(connfd, &recv_buf, sizeof(recv_buf), 0) > 0) {
+			printf("recv data: %d\n", recv_buf);
+			send_buf = recv_buf;
+			send(connfd, &send_buf, sizeof(send_buf), 0);
+//			break;
+		}
+
+
+#endif
 
 		close(connfd);	//关闭已连接套接字
 		printf("client closed!\n");
